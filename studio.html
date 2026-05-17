@@ -458,8 +458,7 @@ async function openTikTokAuthPopup() {
   
   const codeChallenge = await generateCodeChallenge(codeVerifier);
   
-  const authUrl = `https://www.tiktok.com/v2/auth/authorize/?client_key=${AETHER_API_CONFIG.CLIENT_KEY}&scope=user.info.basic,video.publish,video.upload&response_type=code&redirect_uri=${encodeURIComponent(AETHER_API_CONFIG.REDIRECT_URI)}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
-  
+  const authUrl = `https://www.tiktok.com/v2/auth/authorize/?client_key=${AETHER_API_CONFIG.CLIENT_KEY}&scope=user.info.basic,video.list&response_type=code&redirect_uri=${encodeURIComponent(AETHER_API_CONFIG.REDIRECT_URI)}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
   const width = 500;
   const height = 700;
   const left = (screen.width - width) / 2;
