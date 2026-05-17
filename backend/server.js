@@ -18,7 +18,7 @@ const TIKTOK_CONFIG = {
   CLIENT_KEY: "sbawsb9lzwltcl6uv2",       
   CLIENT_SECRET: "ZV5b0rEtRT4Cmjrv0Tnc8MHdTAWyyduV",   
   // Replace the placeholder below with your real live GitHub Pages repository link!
-  REDIRECT_URI: "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/callback"        
+  REDIRECT_URI: "https://moonlight-haven.github.io/AetherEnhancetest/studio.html"        
 };
 
 // ── BINARY BITSTREAM MANIPULATION UTILITIES ──
