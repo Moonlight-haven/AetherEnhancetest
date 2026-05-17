@@ -13,11 +13,12 @@ const upload = multer({
   limits: { fileSize: 500 * 1024 * 1024 } 
 });
 
-// ── CONFIGURATION VARIABLES ──
+// ── CONFIGURATION VARIABLES (SET UP FOR HYBRID TESTING) ──
 const TIKTOK_CONFIG = {
-  CLIENT_KEY: "sbawsb9lzwltcl6uv2",       // Your Real Client Key
-  CLIENT_SECRET: "ZV5b0rEtRT4Cmjrv0Tnc8MHdTAWyyduV",   // Your Real Client Secret
-  REDIRECT_URI: "http://localhost:3000/callback"        // Must match TikTok Dev Portal exactly
+  CLIENT_KEY: "sbawsb9lzwltcl6uv2",       
+  CLIENT_SECRET: "ZV5b0rEtRT4Cmjrv0Tnc8MHdTAWyyduV",   
+  // Replace the placeholder below with your real live GitHub Pages repository link!
+  REDIRECT_URI: "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/callback"        
 };
 
 // ── BINARY BITSTREAM MANIPULATION UTILITIES ──
@@ -86,30 +87,6 @@ function detectVideoFps(buf) {
   return 60; 
 }
 
-// ── OAUTH CALLBACK REDIRECT REDIRECT ROUTE ──
-app.get('/callback', (req, res) => {
-  const { code } = req.query;
-  console.log(`[TikTok Login Auth] Callback received code verification parameter.`);
-  if (!code) return res.send("<h2 style='color:#fe2c55; text-align:center;'>Authentication cancelled or missing authorization code parameter.</h2>");
-  
-  res.send(`
-    <html>
-      <body style="background:#050505;color:#fff;font-family:sans-serif;text-align:center;padding-top:100px;">
-        <h2 style="color:#20d5ec;">Aether Authentication Code Intercepted!</h2>
-        <p>Syncing security tokens back to your active studio dashboard window...</p>
-        <script>
-          if (window.opener) {
-            window.opener.postMessage({ type: 'TIKTOK_AUTH_CODE', code: '${code}' }, '*');
-            window.close();
-          } else {
-            document.body.innerHTML = "<h2>Communication lost with studio window. Please return to your original tab.</h2>";
-          }
-        </script>
-      </body>
-    </html>
-  `);
-});
-
 // ── ENDPOINT 1: QUALITY BYPASS LAYER ──
 app.post('/api/optimize-video', upload.single('video'), (req, res) => {
   try {
@@ -155,10 +132,10 @@ app.post('/api/tiktok/exchange-token', async (req, res) => {
       code: code,
       grant_type: 'authorization_code',
       redirect_uri: TIKTOK_CONFIG.REDIRECT_URI,
-      code_verifier: code_verifier // Handing original verification text securely to TikTok validation node
+      code_verifier: code_verifier // Pipes the matching verifier securely back to TikTok
     }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
     
-    console.log(`[Secure Handshake] Access Token successfully generated and sent to frontend.`);
+    console.log(`[Secure Handshake] Access Token generated successfully!`);
     res.json(tokenResponse.data); 
   } catch (err) {
     console.error("Token exchange failed:", err.response ? err.response.data : err.message);
@@ -166,7 +143,7 @@ app.post('/api/tiktok/exchange-token', async (req, res) => {
   }
 });
 
-// ── ENDPOINT 3: DEBOUNCED @ CREATOR MENTION SEARCH PROXY ──
+// ── ENDPOINT 3: DEBOUNCED CREATOR SEARCH PROXY ──
 app.post('/api/tiktok/search-creator', async (req, res) => {
   const { access_token, query } = req.body;
   console.log(`[Mention Search] Query matching keyword: @${query}`);
