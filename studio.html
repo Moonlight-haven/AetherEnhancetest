@@ -354,7 +354,7 @@
 // ═══════════════════════════════════════
 const AETHER_API_CONFIG = {
   CLIENT_KEY: "sbawsb9lzwltcl6uv2",
-  REDIRECT_URI: "http://localhost:3000/callback",
+  REDIRECT_URI: "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/callback",
   SERVER_API_ROOT: "http://localhost:3000/api"
 };
 Object.freeze(AETHER_API_CONFIG);
@@ -422,11 +422,6 @@ function showToast(msg, duration = 2800) {
 // PKCE UTILITIES
 // ═══════════════════════════════════════
 
-/**
- * Generates a cryptographically secure random string
- * of 64 characters using valid unreserved characters:
- * A-Z, a-z, 0-9, '-', '.', '_', '~'
- */
 function generateCodeVerifier() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
   const array = new Uint8Array(64);
@@ -438,19 +433,12 @@ function generateCodeVerifier() {
   return verifier;
 }
 
-/**
- * SHA-256 hashes the code verifier and returns
- * a Base64URL-encoded code challenge.
- * Replaces '+' with '-', '/' with '_', and strips '=' padding.
- */
 async function generateCodeChallenge(verifier) {
   const encoder = new TextEncoder();
   const data = encoder.encode(verifier);
   const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  // Convert to Base64
   let base64 = btoa(String.fromCharCode.apply(null, hashArray));
-  // Convert to Base64URL
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
@@ -462,25 +450,16 @@ if (!sessionStorage.getItem('studio-auth-dismissed')) {
   setTimeout(() => authModal.classList.add('active'), 2500);
 }
 
-/**
- * Opens TikTok OAuth popup with full PKCE compliance.
- * 1. Generates code_verifier → saves to localStorage
- * 2. Generates code_challenge via SHA-256
- * 3. Opens TikTok auth URL with code_challenge & S256 method
- */
 async function openTikTokAuthPopup() {
   authModal.classList.remove('active');
   
-  // Generate PKCE codes
   const codeVerifier = generateCodeVerifier();
   localStorage.setItem('tiktok_code_verifier', codeVerifier);
   
   const codeChallenge = await generateCodeChallenge(codeVerifier);
   
-  // Build TikTok OAuth URL with PKCE parameters
   const authUrl = `https://www.tiktok.com/v2/auth/authorize/?client_key=${AETHER_API_CONFIG.CLIENT_KEY}&scope=user.info.basic,video.publish,video.upload&response_type=code&redirect_uri=${encodeURIComponent(AETHER_API_CONFIG.REDIRECT_URI)}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
   
-  // Open centered popup
   const width = 500;
   const height = 700;
   const left = (screen.width - width) / 2;
@@ -494,36 +473,26 @@ async function openTikTokAuthPopup() {
   
   showToast('🔐 Waiting for TikTok authorization...');
   
-  // Listen for popup to redirect back with code
+  // Poll for popup redirect
   const pollTimer = setInterval(() => {
     try {
-      // Check if popup redirected to our callback
       if (popup.location.href.includes(AETHER_API_CONFIG.REDIRECT_URI)) {
         clearInterval(pollTimer);
         const popupUrl = new URL(popup.location.href);
         const authCode = popupUrl.searchParams.get('code');
         popup.close();
-        
-        if (authCode) {
-          exchangeTokenWithPKCE(authCode);
-        }
+        if (authCode) exchangeTokenWithPKCE(authCode);
       }
-    } catch (e) {
-      // Cross-origin until redirect happens — expected
-    }
-    
-    // Check if popup was closed manually
-    if (popup.closed) {
-      clearInterval(pollTimer);
-    }
+    } catch (e) { /* cross-origin until redirect */ }
+    if (popup.closed) clearInterval(pollTimer);
   }, 500);
   
-  // Fallback: listen for postMessage from callback page
-  window.addEventListener('message', function pkceMessageHandler(event) {
+  // Listen for postMessage from callback page
+  window.addEventListener('message', function pkceHandler(event) {
     if (event.origin !== window.location.origin) return;
     const { code } = event.data || {};
     if (code) {
-      window.removeEventListener('message', pkceMessageHandler);
+      window.removeEventListener('message', pkceHandler);
       clearInterval(pollTimer);
       if (popup && !popup.closed) popup.close();
       exchangeTokenWithPKCE(code);
@@ -531,13 +500,8 @@ async function openTikTokAuthPopup() {
   });
 }
 
-/**
- * Exchanges the authorization code for an access token
- * using the stored PKCE code verifier.
- */
 async function exchangeTokenWithPKCE(code) {
   const codeVerifier = localStorage.getItem('tiktok_code_verifier');
-  
   if (!codeVerifier) {
     showToast('⚠ PKCE verifier missing. Please re-authorize.');
     return;
@@ -547,15 +511,12 @@ async function exchangeTokenWithPKCE(code) {
     const res = await fetch(`${AETHER_API_CONFIG.SERVER_API_ROOT}/tiktok/exchange-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code: code,
-        code_verifier: codeVerifier
-      })
+      body: JSON.stringify({ code: code, code_verifier: codeVerifier })
     });
     
     if (res.ok) {
       const data = await res.json();
-      localStorage.removeItem('tiktok_code_verifier'); // Clean up
+      localStorage.removeItem('tiktok_code_verifier');
       setAuthorized(data.access_token, data.user_info || null);
     } else {
       const errData = await res.json().catch(() => ({}));
@@ -565,13 +526,11 @@ async function exchangeTokenWithPKCE(code) {
   } catch (err) {
     showToast('⚠ Connection error. Is the backend running?');
     console.error('Token exchange error:', err);
-    // Sandbox fallback for testing
     setAuthorized('sandbox_' + crypto.randomUUID(), { display_name: 'DevUser', username: 'sandbox_user' });
     localStorage.removeItem('tiktok_code_verifier');
   }
 }
 
-// Wire buttons
 $('#modal-authorize-btn').addEventListener('click', openTikTokAuthPopup);
 $('#modal-later-btn').addEventListener('click', () => {
   authModal.classList.remove('active');
@@ -580,9 +539,7 @@ $('#modal-later-btn').addEventListener('click', () => {
 });
 $('#connect-btn').addEventListener('click', openTikTokAuthPopup);
 
-// ═══════════════════════════════════════
-// CHECK FOR RETURNING OAUTH CODE (page redirect fallback)
-// ═══════════════════════════════════════
+// Check for redirect code in URL (page-level redirect)
 const urlParams = new URLSearchParams(window.location.search);
 const authCode = urlParams.get('code');
 if (authCode) {
@@ -655,7 +612,7 @@ if (sessionStorage.getItem('studio-authorized') === 'true') {
 updateAuthUI();
 
 // ═══════════════════════════════════════
-// METADATA FIELD LOCKING
+// METADATA LOCKING
 // ═══════════════════════════════════════
 function setMetadataFieldsDisabled(disabled) {
   $('#caption-input').disabled = disabled;
