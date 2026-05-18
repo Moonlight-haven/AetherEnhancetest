@@ -382,7 +382,7 @@
 // ═══════════════════════════════════════
 // READ CONFIG FROM CENTRALIZED config.js
 // ═══════════════════════════════════════
-const API = window.AETHER_API_CONFIG;
+const API = window.config || window.AETHER_API_CONFIG;
 if (!API) {
   alert('Configuration missing! Please ensure config.js is loaded before this page.');
   return;
