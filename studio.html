@@ -160,7 +160,7 @@
     .status-val{font-weight:600;color:var(--text-primary)}
     .status-indicator{font-size:8px;font-weight:600}
     .status-indicator.green{color:var(--green)}.status-indicator.amber{color:var(--amber)}.status-indicator.red{color:var(--tt-red)}
-    .main-upload-btn{width:100%;padding:13px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;font-family:'Inter',sans-serif;background:var(--tt-red);color:white;border:none;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 24px var(--tt-red-dim)}
+    .main-upload-btn{width:100%;padding:13px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;font-family:'Inter',sans-serif;color:white;border:none;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 24px var(--tt-red-dim)}
     .main-upload-btn:hover{filter:brightness(1.08);box-shadow:0 6px 32px var(--tt-red-dim)}
     .main-upload-btn:disabled{opacity:.3;cursor:not-allowed;filter:none;box-shadow:none}
     .account-card{background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:13px;display:flex;align-items:center;justify-content:space-between;gap:10px;transition:background .3s,border-color .3s}
@@ -193,7 +193,6 @@
     .modal-btn-secondary:hover{border-color:var(--border-light);color:var(--white)}
     .modal-footer-note{font-size:7px;color:var(--text-muted);margin-top:14px;text-transform:uppercase;letter-spacing:.08em;font-family:'Geist Mono',monospace}
     
-    /* Unlink confirmation modal */
     .unlink-verify-input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:10px 14px;color:var(--text-primary);font-size:13px;font-family:'Inter',sans-serif;text-align:center;margin:12px 0 16px;transition:border-color .2s}
     .unlink-verify-input:focus{outline:none;border-color:var(--tt-red)}
     .unlink-verify-input::placeholder{color:var(--text-muted)}
@@ -359,7 +358,7 @@
       <div class="toggle-row"><div class="toggle-label-text">Disable Duet</div><label class="toggle-switch"><input type="checkbox" id="disable-duet" disabled><span class="toggle-slider"></span></label></div>
       <div class="toggle-row"><div class="toggle-label-text">Disable Stitch</div><label class="toggle-switch"><input type="checkbox" id="disable-stitch" disabled><span class="toggle-slider"></span></label></div>
     </div>
-    <div class="settings-section"><button class="main-upload-btn" id="main-upload-btn" disabled><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Optimize Video Quality</button></div>
+    <div class="settings-section"><button class="main-upload-btn" id="main-upload-btn" disabled style="background:var(--white);color:var(--bg);"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Optimize Video Quality</button></div>
     <div class="settings-section" id="status-section" style="display:none"><label class="settings-label">Source Video Specifications</label>
       <table class="status-table"><thead><tr><th>Property</th><th>Current</th><th>Target</th><th>Status</th></tr></thead><tbody>
         <tr><td style="color:var(--text-muted)">File Size</td><td class="status-val" id="stat-size">—</td><td style="color:var(--text-muted)">&lt;500 MB</td><td class="status-indicator" id="stat-size-status">—</td></tr>
@@ -503,7 +502,7 @@ async function exchangeTokenWithPKCE(code) {
       const data = await res.json();
       localStorage.removeItem('tiktok_code_verifier');
       setAuthorized(data.access_token, data.user_info || null);
-      // Fetch user profile info
+      // ═════ FETCH USER PROFILE ═════
       fetchUserProfile(data.access_token);
     } else {
       const errData = await res.json().catch(() => ({}));
@@ -518,13 +517,16 @@ async function exchangeTokenWithPKCE(code) {
     localStorage.removeItem('tiktok_code_verifier');
   }
 }
+
 // ═══════════════════════════════════════
-// FETCH USER PROFILE
+// FETCH USER PROFILE (Avatar & Display Name)
 // ═══════════════════════════════════════
 async function fetchUserProfile(token) {
   try {
     const res = await fetch(`${AETHER_API_CONFIG.SERVER_API_ROOT}/tiktok/userinfo`, {
-      headers: { 'Authorization': 'Bearer ' + token }
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: token })
     });
     if (res.ok) {
       const profile = await res.json();
@@ -545,6 +547,7 @@ function updateProfileUI(profile) {
     $('#header-avatar-placeholder').innerHTML = avatarImg;
   }
 }
+
 $('#modal-authorize-btn').addEventListener('click', openTikTokAuthPopup);
 $('#modal-later-btn').addEventListener('click', () => { authModal.classList.remove('active'); sessionStorage.setItem('studio-auth-dismissed', 'true'); showToast('You can authorize later'); });
 $('#connect-btn').addEventListener('click', openTikTokAuthPopup);
@@ -619,7 +622,6 @@ const unlinkConfirmName = $('#unlink-confirm-name');
 
 $('#unlink-btn').addEventListener('click', function(e) {
   e.preventDefault(); e.stopPropagation();
-  // Show unlink modal
   const currentName = state.userInfo?.display_name || state.userInfo?.username || 'Unknown';
   unlinkConfirmName.textContent = currentName;
   unlinkVerifyInput.value = '';
@@ -628,7 +630,6 @@ $('#unlink-btn').addEventListener('click', function(e) {
   unlinkModal.classList.add('active');
 });
 
-// Enable confirm button only when input matches
 unlinkVerifyInput.addEventListener('input', function() {
   const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
   if (this.value.trim() === currentName) {
@@ -640,7 +641,6 @@ unlinkVerifyInput.addEventListener('input', function() {
   }
 });
 
-// Confirm unlink
 $('#unlink-confirm-btn').addEventListener('click', function() {
   const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
   if (unlinkVerifyInput.value.trim() === currentName) {
@@ -651,7 +651,6 @@ $('#unlink-confirm-btn').addEventListener('click', function() {
   }
 });
 
-// Cancel unlink
 $('#unlink-cancel-btn').addEventListener('click', function() {
   unlinkModal.classList.remove('active');
 });
@@ -720,22 +719,28 @@ function handleVideoFile(file) {
   setMetadataFieldsDisabled(true);
   $('#main-upload-btn').disabled = false;
   $('#header-upload-btn').disabled = true;
-  resetMainButton('Optimize Video Quality');
+  resetOptimizeButton();
   inspectVideoMedia(file);
   previewVideo.play().then(() => { state.isPlaying = true; updatePlayPauseIcon(); }).catch(() => {});
 }
-function resetMainButton(text) {
+
+// ═══════════════════════════════════════
+// BUTTON STATE HELPERS
+// ═══════════════════════════════════════
+function resetOptimizeButton() {
   const btn = $('#main-upload-btn');
-  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' + text;
+  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Optimize Video Quality';
   btn.style.background = 'var(--white)';
   btn.style.color = 'var(--bg)';
 }
-function setMainButtonPublish() {
+function setDownloadPatchedButton() {
   const btn = $('#main-upload-btn');
-  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Publish to TikTok';
-  btn.style.background = 'var(--tt-red)';
-  btn.style.color = 'white';
+  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>⬇ Download Patched Master';
+  btn.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)';
+  btn.style.color = '#050505';
+  btn.style.fontWeight = '800';
 }
+
 async function inspectVideoMedia(file) {
   $('#status-section').style.display = 'block';
   const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
@@ -891,7 +896,7 @@ document.addEventListener('click', (e) => {
 });
 
 // ═══════════════════════════════════════
-// OPTIMIZE PIPELINE (First Progress)
+// OPTIMIZE PIPELINE
 // ═══════════════════════════════════════
 async function executeOptimizePipeline() {
   if (!state.videoFile) return showToast('⚠ Please select a video first');
@@ -901,7 +906,6 @@ async function executeOptimizePipeline() {
   const progressBar = $('#progress-bar-fill');
   const steps = ['proc-step-1', 'proc-step-2', 'proc-step-3', 'proc-step-4'];
   
-  // Reset overlay
   progressBar.style.width = '0%';
   progressBar.style.background = 'linear-gradient(90deg, var(--tt-red), var(--tt-cyan))';
   steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
@@ -939,13 +943,15 @@ async function executeOptimizePipeline() {
       await new Promise(r => setTimeout(r, 2000));
       optimizedBlob = new Blob([state.videoFile], { type: 'video/mp4' });
     }
+    // ═════ SAVE TO GLOBAL STORAGE ═════
     window.AETHER_OPTIMIZED_BLOB = optimizedBlob;
     state.isOptimized = true;
+    
     setStep(2, 'Verifying stream integrity...', 70);
     await new Promise(r => setTimeout(r, 600));
-    setStep(3, 'Optimization complete — Ready for TikTok', 100);
+    setStep(3, 'Optimization complete — Master patched', 100);
     progressBar.style.background = 'var(--green)';
-    subtitle.textContent = 'Optimization complete';
+    subtitle.textContent = 'Optimization complete — Download ready';
     $('#stat-fps').textContent = '✓ Managed';
     $('#stat-fps-status').textContent = '✓ Managed';
     $('#stat-fps-status').className = 'status-indicator green';
@@ -955,9 +961,10 @@ async function executeOptimizePipeline() {
       progressBar.style.width = '0%';
       steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
       setMetadataFieldsDisabled(false);
-      setMainButtonPublish();
+      // ═════ CHANGE BUTTON TO CYAN DOWNLOAD ═════
+      setDownloadPatchedButton();
       if (state.isAuthorized) { $('#header-upload-btn').disabled = false; }
-      showToast('✓ Video optimized — Ready to publish');
+      showToast('✓ Master patched — Ready to download');
     }, 1200);
   } catch (err) {
     overlay.classList.remove('active');
@@ -968,11 +975,11 @@ async function executeOptimizePipeline() {
 }
 
 // ═══════════════════════════════════════
-// PUBLISH PIPELINE (Second Progress: 1-100 count)
+// DOWNLOAD PIPELINE (1-100% + instant download)
 // ═══════════════════════════════════════
-async function executePublishPipeline() {
+async function executeDownloadPipeline() {
   if (!state.isOptimized) return executeOptimizePipeline();
-  if (!state.isAuthorized) { showToast('⚠ Please authorize TikTok first'); authModal.classList.add('active'); return; }
+  if (!window.AETHER_OPTIMIZED_BLOB) return showToast('⚠ No optimized stream found');
   
   const overlay = $('#processing-overlay');
   const subtitle = $('#processing-subtitle');
@@ -980,62 +987,49 @@ async function executePublishPipeline() {
   const progressBar = $('#progress-bar-fill');
   const steps = ['proc-step-1', 'proc-step-2', 'proc-step-3', 'proc-step-4'];
   
-  // FULL RESET of overlay
+  // FULL RESET
   progressBar.style.width = '0%';
-  progressBar.style.background = 'linear-gradient(90deg, var(--tt-red), var(--tt-cyan))';
+  progressBar.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)';
   steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
   $('#proc-step-1').classList.add('active');
-  title.textContent = 'Publishing to TikTok';
-  subtitle.textContent = 'Uploading high-fidelity edit to TikTok patches...';
+  title.textContent = 'Downloading Patched Master';
+  subtitle.textContent = 'Preparing high-fidelity download...';
   
   overlay.classList.add('active');
   $('#header-upload-btn').disabled = true;
   $('#main-upload-btn').disabled = true;
   
-  try {
-    // Build publish data
-    const publishData = new FormData();
-    publishData.append('video', window.AETHER_OPTIMIZED_BLOB, 'optimized.mp4');
-    publishData.append('caption', $('#caption-input').value);
-    publishData.append('privacy_level', $('#privacy-select').value);
-    publishData.append('disable_comment', $('#disable-comment').checked);
-    publishData.append('disable_duet', $('#disable-duet').checked);
-    publishData.append('disable_stitch', $('#disable-stitch').checked);
-    publishData.append('access_token', state.accessToken);
-    if (state.selectedLocation) publishData.append('location', state.selectedLocation.name);
-    if (state.selectedMentions.length > 0) publishData.append('mentions', JSON.stringify(state.selectedMentions));
-    
-    // Start 1-100 counting animation
-    let percent = 1;
-    progressBar.style.width = '1%';
-    
-    const countInterval = setInterval(() => {
-      percent += Math.floor(Math.random() * 5) + 1;
-      if (percent >= 100) {
-        percent = 100;
-        clearInterval(countInterval);
-      }
-      progressBar.style.width = percent + '%';
-    }, 150);
-    
-    // Actual API call
-    let publishSuccess = false;
-    try {
-      const res = await fetch(`${AETHER_API_CONFIG.SERVER_API_ROOT}/tiktok/publish-post`, { method: 'POST', body: publishData });
-      if (res.ok) { publishSuccess = true; }
-    } catch (e) {
-      // Sandbox fallback
-      await new Promise(r => setTimeout(r, 2000));
-      publishSuccess = true;
+  // ═════ INSTANT BROWSER DOWNLOAD ═════
+  const downloadUrl = URL.createObjectURL(window.AETHER_OPTIMIZED_BLOB);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = 'aether_master_edit_patched.mp4';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(downloadUrl);
+  
+  // ═════ 1-100 COUNTING ANIMATION ═════
+  let percent = 1;
+  progressBar.style.width = '1%';
+  
+  const countInterval = setInterval(() => {
+    percent += Math.floor(Math.random() * 6) + 1;
+    if (percent >= 100) {
+      percent = 100;
+      clearInterval(countInterval);
     }
-    
-    // Ensure we reach 100%
+    progressBar.style.width = percent + '%';
+    subtitle.textContent = 'Downloading... ' + percent + '%';
+  }, 120);
+  
+  // Ensure we finish
+  setTimeout(() => {
     clearInterval(countInterval);
     progressBar.style.width = '100%';
     progressBar.style.background = 'var(--green)';
-    subtitle.textContent = 'Published successfully — Live on TikTok Sandbox';
+    subtitle.textContent = 'Download complete — aether_master_edit_patched.mp4';
     
-    // Mark all steps done
     steps.forEach(id => { const el = $('#' + id); if (el) { el.classList.remove('active'); el.classList.add('done'); } });
     
     setTimeout(() => {
@@ -1046,16 +1040,10 @@ async function executePublishPipeline() {
       $('#proc-step-1').classList.add('active');
       $('#header-upload-btn').disabled = false;
       $('#main-upload-btn').disabled = false;
-      showToast('✓ Video published to TikTok');
+      setDownloadPatchedButton();
+      showToast('✓ Master patched file downloaded');
     }, 2000);
-    
-  } catch (err) {
-    overlay.classList.remove('active');
-    $('#header-upload-btn').disabled = false;
-    $('#main-upload-btn').disabled = false;
-    showToast('⚠ Publish failed: ' + err.message);
-    console.error('Publish error:', err);
-  }
+  }, 2500);
 }
 
 // ═══════════════════════════════════════
@@ -1063,14 +1051,14 @@ async function executePublishPipeline() {
 // ═══════════════════════════════════════
 $('#main-upload-btn').addEventListener('click', () => {
   if (!state.isOptimized) executeOptimizePipeline();
-  else executePublishPipeline();
+  else executeDownloadPipeline();
 });
-$('#header-upload-btn').addEventListener('click', executePublishPipeline);
+$('#header-upload-btn').addEventListener('click', executeDownloadPipeline);
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
     if (!state.isOptimized) executeOptimizePipeline();
-    else executePublishPipeline();
+    else executeDownloadPipeline();
   }
 });
 })();
