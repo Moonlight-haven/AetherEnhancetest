@@ -12,6 +12,8 @@ const fs = require('fs');
 dotenv.config();
 
 const app = express();
+
+// Enable global CORS for your custom domain and GitHub pages layout
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
@@ -21,19 +23,20 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
-// ─── Multer Configuration – Disk-backed, 500 MB Cap ───────────────────────────
+// ─── Multer Configuration – Disk-backed Engine ───────────────────────────────
 const upload = multer({
   dest: 'uploads/',
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB headroom safety
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB Master headroom limit
 });
 
+// Dynamic configuration matching your variables environment
 const TIKTOK_CONFIG = {
   CLIENT_KEY: process.env.TIKTOK_CLIENT_KEY || "sbawsb9lzwltcl6uv2",
   CLIENT_SECRET: process.env.TIKTOK_CLIENT_SECRET || "",
-  REDIRECT_URI: "https://moonlight-haven.github.io/AetherEnhancetest/studio.html"
+  REDIRECT_URI: process.env.REDIRECT_URI || "https://moonlight-haven.github.io/AetherEnhancetest/studio.html"
 };
 
-// ─── Direct IO Cleanup Helper ────────────────────────────────────────────────
+// ─── Storage Cleanup Helper ────────────────────────────────────────────────
 function safeUnlink(filePath) {
   if (!filePath) return;
   fs.unlink(filePath, (err) => {
@@ -44,70 +47,130 @@ function safeUnlink(filePath) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  EXPRESS ROUTE ENDPOINTS
+//  PRODUCTION ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Endpoint 1: High-Fidelity Processing Pipeline
+// PATH A: Restored Legacy Flow – Process and Download Back to PC
 app.post('/api/optimize-video', upload.single('video'), (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded. Use field name "video".' });
+    return res.status(400).json({ error: 'No file uploaded.' });
   }
 
   const inputPath = req.file.path;
   const outputPath = path.join(UPLOADS_DIR, `aetherenhance_${req.file.filename}.mp4`);
 
-  console.log(`[AetherEnhance] Initializing FFmpeg processing flow for: ${req.file.originalname}`);
+  console.log(`[Legacy Flow] Optimizing file for local PC return: ${req.file.originalname}`);
 
   ffmpeg(inputPath)
     .videoCodec('libx264')
     .outputOptions([
-      '-profile:v high',      // H.264 High Profile block allocation
-      '-level:v 4.2',         // Level 4.2 profile constraints matching modern decoders
-      '-pix_fmt yuv420p',     // Standardized mobile playback color layout
-      '-crf 18',              // Visually lossless compression threshold
-      '-g 30',                // Static Group of Pictures (GOP) boundaries
-      '-movflags +faststart'  // Relocate moov atom block to engine head
+      '-profile:v high',
+      '-level:v 4.2',
+      '-pix_fmt yuv420p',
+      '-crf 18',
+      '-g 30',
+      '-movflags +faststart'
     ])
-    .audioCodec('copy')       // Direct raw bitstream transfer (zero re-encode latency)
+    .audioCodec('copy')
     .format('mp4')
     .output(outputPath)
-    .on('start', (cmd) => {
-      console.log('◈ [FFmpeg Processing Subsystem Active]:', cmd);
-    })
-    .on('progress', (progress) => {
-      const percentage = progress.percent ?? 0;
-      console.log(`[AetherEnhance] Progress: ${percentage.toFixed(1)}% | Current FPS: ${progress.currentFps}`);
-    })
     .on('error', (err, _stdout, stderr) => {
-      console.error('[AetherEnhance] Processing engine crash:', err.message);
-      console.error('[AetherEnhance] Stderr Dump:\n', stderr);
-
+      console.error('[FFmpeg Error]:', err.message);
       safeUnlink(inputPath);
       safeUnlink(outputPath);
-
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Video conversion engine failure.', detail: err.message });
-      }
+      if (!res.headersSent) res.status(500).json({ error: 'FFmpeg optimization failed.' });
     })
     .on('end', () => {
-      console.log('[AetherEnhance] Encoding pass complete. Syncing file dispatch loop...');
       const outputName = `aetherenhance_${req.file.originalname || 'output.mp4'}`;
-
       res.download(outputPath, outputName, (downloadErr) => {
-        // Enforce cleanup immediately on file transfer termination
         safeUnlink(inputPath);
         safeUnlink(outputPath);
-
-        if (downloadErr && !res.headersSent) {
-          console.error('[AetherEnhance] Client output dispatch error:', downloadErr.message);
-          res.status(500).json({ error: 'File delivery infrastructure failure.' });
-        }
       });
     })
     .run();
 });
 
-// Endpoint 2: TikTok Auth Token Exchange
+// PATH B: The Direct Bypass Flow – Optimize and Upload Straight to TikTok API
+app.post('/api/tiktok/publish-post', upload.single('video'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No video payload provided.' });
+  }
+
+  const accessToken = req.headers.authorization?.split(' ')[1] || req.body.access_token;
+  if (!accessToken) {
+    safeUnlink(req.file.path);
+    return res.status(401).json({ error: 'Missing active TikTok OAuth Access Token.' });
+  }
+
+  const inputPath = req.file.path;
+  const optimizedPath = path.join(UPLOADS_DIR, `publish_opt_${req.file.filename}.mp4`);
+
+  try {
+    console.log('[Bypass Flow] Step 1: Executing live FFmpeg optimization pass on cloud server...');
+
+    // Run optimization directly inside the publishing pipeline
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .videoCodec('libx264')
+        .outputOptions(['-profile:v high', '-level:v 4.2', '-pix_fmt yuv420p', '-crf 18', '-g 30', '-movflags +faststart'])
+        .audioCodec('copy')
+        .format('mp4')
+        .output(optimizedPath)
+        .on('end', () => resolve())
+        .on('error', (err) => reject(err))
+        .run();
+    });
+
+    const optimizedStats = fs.statSync(optimizedPath);
+    console.log('[Bypass Flow] Step 2: Requesting upload URL initialization handshake from TikTok...');
+
+    const initResponse = await axios.post(
+      'https://open.tiktokapis.com/v2/post/publish/video/init/',
+      { source: 'FILE_UPLOAD', video_size: optimizedStats.size },
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json; charset=UTF-8'
+        }
+      }
+    );
+
+    const uploadUrl = initResponse.data?.data?.upload_url;
+    const publishId = initResponse.data?.data?.publish_id;
+
+    if (!uploadUrl) {
+      throw new Error(`Initialization failed: ${JSON.stringify(initResponse.data)}`);
+    }
+
+    console.log('[Bypass Flow] Step 3: Streaming high-fidelity optimized binary to TikTok servers...');
+    const videoStream = fs.createReadStream(optimizedPath);
+    
+    await axios.put(uploadUrl, videoStream, {
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Length': optimizedStats.size
+      },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    });
+
+    console.log(`[Success] Video published successfully via API loop! ID: ${publishId}`);
+
+    // Storage cleanup
+    safeUnlink(inputPath);
+    safeUnlink(optimizedPath);
+
+    return res.json({ status: 'success', message: 'Video posted directly via cloud bypass layer.', publish_id: publishId });
+
+  } catch (err) {
+    console.error('[Publish Pipeline Exception]:', err.response?.data || err.message);
+    safeUnlink(inputPath);
+    safeUnlink(optimizedPath);
+    return res.status(500).json({ error: 'Direct API publishing pipeline failed.', detail: err.response?.data || err.message });
+  }
+});
+
+// TikTok OAuth Token Exchange Endpoint
 app.post('/api/tiktok/exchange-token', async (req, res) => {
   const { code, code_verifier } = req.body;
   try {
@@ -122,19 +185,16 @@ app.post('/api/tiktok/exchange-token', async (req, res) => {
     
     res.json(tokenResponse.data); 
   } catch (err) {
-    res.status(500).json({ error: "TikTok Token verification pipeline exception." });
+    res.status(500).json({ error: "Token verification pipeline exception.", detail: err.response?.data || err.message });
   }
 });
 
-// Endpoint 3: TikTok Profile Data Fetch
+// TikTok Profile Data Fetch Endpoint
 app.post('/api/tiktok/userinfo', async (req, res) => {
   const { access_token } = req.body;
   try {
     const response = await axios.get('https://open.tiktokapis.com/v2/user/info/', {
-      headers: {
-        'Authorization': `Bearer ${access_token}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
       params: { fields: 'open_id,union_id,avatar_url,display_name,username' }
     });
     res.json(response.data);
@@ -143,14 +203,5 @@ app.post('/api/tiktok/userinfo', async (req, res) => {
   }
 });
 
-// Endpoint 4: Direct Share Verification
-app.post('/api/tiktok/publish-post', upload.single('video'), async (req, res) => {
-  try {
-    return res.json({ status: "success", message: "Sandbox route verified." });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`◈ [Aether Platform Node Engine] Online via structural port ${PORT}`));
+app.listen(PORT, () => console.log(`◈ [Aether Platform Engine] Online via cloud port ${PORT}`));
