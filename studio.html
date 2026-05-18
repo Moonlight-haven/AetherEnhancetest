@@ -487,7 +487,7 @@ async function openTikTokAuthPopup() {
   // Must be EXACTLY: user.info.basic,video.upload,video.publish
   // No spaces, no "or" words, no extra characters
   // ═══════════════════════════════════════
-  const scopes = 'user.info.basic,video.upload,video.publish';
+  const scopes = 'user.info.basic,video.publish';
   
   // Build URL with string concatenation to avoid any encoding of the scopes string
   const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
