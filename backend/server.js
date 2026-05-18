@@ -1,3 +1,5 @@
+'use strict';
+
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -10,10 +12,10 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// Set up 500MB memory thresholds for high-framerate master edits
-const upload = multer({ 
+// ─── Multer – memory storage, 2 GB cap ────────────────────────────────────────
+const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 } 
+  limits: { fileSize: 2 * 1024 * 1024 * 1024 },
 });
 
 const TIKTOK_CONFIG = {
@@ -22,137 +24,250 @@ const TIKTOK_CONFIG = {
   REDIRECT_URI: "https://moonlight-haven.github.io/AetherEnhancetest/studio.html"
 };
 
-// ── BINARY BITSTREAM MANIPULATION UTILITIES ──
-function writeU32(buf, off, v) { 
-  buf.writeUInt32BE(v >>> 0, off); 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  LOW-LEVEL BUFFER HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function readU32(buf, offset) {
+  if (offset + 4 > buf.length) throw new RangeError(`readU32 OOB @ ${offset}`);
+  return buf.readUInt32BE(offset);
 }
 
+function writeU32(buf, offset, value) {
+  if (offset + 4 > buf.length) throw new RangeError(`writeU32 OOB @ ${offset}`);
+  buf.writeUInt32BE(value >>> 0, offset);
+}
+
+function readU64(buf, offset) {
+  if (offset + 8 > buf.length) throw new RangeError(`readU64 OOB @ ${offset}`);
+  const hi = buf.readUInt32BE(offset);
+  const lo = buf.readUInt32BE(offset + 4);
+  return hi * 0x1_0000_0000 + lo;
+}
+
+function writeU64(buf, offset, value) {
+  if (offset + 8 > buf.length) throw new RangeError(`writeU64 OOB @ ${offset}`);
+  const hi = Math.floor(value / 0x1_0000_0000);
+  const lo = value >>> 0;
+  buf.writeUInt32BE(hi >>> 0, offset);
+  buf.writeUInt32BE(lo, offset + 4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ATOM / BOX WALKER
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function* walkBoxes(buf, start, end) {
-  let off = start;
-  while (off + 8 <= end) {
-    let size = buf.readUInt32BE(off);
-    const type = buf.toString('ascii', off + 4, off + 8);
-    let hdrLen = 8;
-    if (size === 1) { 
-      size = Number(buf.readBigUInt64BE(off + 8)); 
-      hdrLen = 16; 
+  let pos = start;
+  while (pos + 8 <= end) {
+    const size32 = readU32(buf, pos);
+    const name   = buf.slice(pos + 4, pos + 8).toString('latin1');
+
+    let totalSize;
+    let headerSize;
+
+    if (size32 === 1) {
+      if (pos + 16 > end) break;
+      totalSize  = readU64(buf, pos + 8);
+      headerSize = 16;
+    } else if (size32 === 0) {
+      totalSize  = end - pos;
+      headerSize = 8;
+    } else {
+      totalSize  = size32;
+      headerSize = 8;
     }
-    if (size <= 0 || off + size > end) break;
-    yield { type, start: off, contentStart: off + hdrLen, contentEnd: off + size };
-    off += size;
+
+    if (totalSize < headerSize || pos + totalSize > end) break;
+
+    yield {
+      name,
+      offset:        pos,
+      headerSize,
+      payloadOffset: pos + headerSize,
+      payloadSize:   totalSize - headerSize,
+      totalSize,
+    };
+
+    pos += totalSize;
   }
 }
 
-function findBoxes(buf, type, start, end) {
-  const res = []; 
-  for (const b of walkBoxes(buf, start, end)) { 
-    if (b.type === type) res.push(b); 
-  } 
-  return res;
-}
-
-function findChild(buf, parent, type) {
-  for (const b of walkBoxes(buf, parent.contentStart, parent.contentEnd)) { 
-    if (b.type === type) return b; 
-  } 
+function findBox(buf, containerPayloadOffset, containerPayloadSize, targetName) {
+  for (const box of walkBoxes(buf, containerPayloadOffset, containerPayloadOffset + containerPayloadSize)) {
+    if (box.name === targetName) return box;
+  }
   return null;
 }
 
-// ── ENDPOINT 1: QUALITY BYPASS LAYER (WITH STTS TIMELINE LOCKED) ──
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PATCH HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TARGET_TIMESCALE = 30_000;
+
+function patchMvhd(buf, box) {
+  const p       = box.payloadOffset;  
+  const version = buf[p];
+
+  if (version === 0) {
+    const oldTimescale = readU32(buf, p + 12);
+    const oldDuration  = readU32(buf, p + 16);
+    const scale        = TARGET_TIMESCALE / oldTimescale;
+    const newDuration  = Math.round(oldDuration * scale);
+
+    writeU32(buf, p + 12, TARGET_TIMESCALE);
+    writeU32(buf, p + 16, newDuration);
+
+    return scale;
+  } else {
+    const oldTimescale = readU32(buf, p + 20);
+    const oldDuration  = readU64(buf, p + 24);
+    const scale        = TARGET_TIMESCALE / oldTimescale;
+    const newDuration  = Math.round(oldDuration * scale);
+
+    writeU32(buf, p + 20, TARGET_TIMESCALE);
+    writeU64(buf, p + 24, newDuration);
+
+    return scale;
+  }
+}
+
+function patchMdhd(buf, box) {
+  const p       = box.payloadOffset;
+  const version = buf[p];
+
+  if (version === 0) {
+    const oldTimescale = readU32(buf, p + 12);
+    const oldDuration  = readU32(buf, p + 16);
+    const scale        = TARGET_TIMESCALE / oldTimescale;
+
+    writeU32(buf, p + 12, TARGET_TIMESCALE);
+    writeU32(buf, p + 16, Math.round(oldDuration * scale));
+
+    return scale;
+  } else {
+    const oldTimescale = readU32(buf, p + 20);
+    const oldDuration  = readU64(buf, p + 24);
+    const scale        = TARGET_TIMESCALE / oldTimescale;
+
+    writeU32(buf, p + 20, TARGET_TIMESCALE);
+    writeU64(buf, p + 24, Math.round(oldDuration * scale));
+
+    return scale;
+  }
+}
+
+function patchStts(buf, box, scaleFactor) {
+  const p          = box.payloadOffset;
+  const entryCount = readU32(buf, p + 4);
+  let   cursor     = p + 8;
+
+  for (let i = 0; i < entryCount; i++) {
+    if (cursor + 8 > buf.length) break;
+
+    const delta    = readU32(buf, cursor + 4);
+    const newDelta = Math.max(1, Math.round(delta * scaleFactor));
+    writeU32(buf, cursor + 4, newDelta);
+
+    cursor += 8;
+  }
+}
+
+function patchCtts(buf, box, scaleFactor) {
+  const p          = box.payloadOffset;
+  const version    = buf[p];
+  const entryCount = readU32(buf, p + 4);
+  let   cursor     = p + 8;
+
+  for (let i = 0; i < entryCount; i++) {
+    if (cursor + 8 > buf.length) break;
+
+    if (version === 1) {
+      const offset    = buf.readInt32BE(cursor + 4);
+      const newOffset = Math.round(offset * scaleFactor);
+      buf.writeInt32BE(newOffset, cursor + 4);
+    } else {
+      const offset    = readU32(buf, cursor + 4);
+      const newOffset = Math.round(offset * scaleFactor);
+      writeU32(buf, cursor + 4, newOffset);
+    }
+
+    cursor += 8;
+  }
+}
+
+function patchMp4(inputBuffer) {
+  const buf = Buffer.from(inputBuffer);
+
+  const moov = findBox(buf, 0, buf.length, 'moov');
+  if (!moov) throw new Error('No moov box found – is this a valid MP4?');
+
+  const mvhd = findBox(buf, moov.payloadOffset, moov.payloadSize, 'mvhd');
+  if (!mvhd) throw new Error('No mvhd box found inside moov');
+
+  const movieScaleFactor = patchMvhd(buf, mvhd);
+
+  for (const trak of walkBoxes(buf, moov.payloadOffset, moov.payloadOffset + moov.payloadSize)) {
+    if (trak.name !== 'trak') continue;
+
+    const mdia = findBox(buf, trak.payloadOffset, trak.payloadSize, 'mdia');
+    if (!mdia) continue;
+
+    const mdhd = findBox(buf, mdia.payloadOffset, mdia.payloadSize, 'mdhd');
+    if (!mdhd) continue;
+
+    const mediaScaleFactor = patchMdhd(buf, mdhd);
+
+    const minf = findBox(buf, mdia.payloadOffset, mdia.payloadSize, 'minf');
+    if (!minf) continue;
+
+    const stbl = findBox(buf, minf.payloadOffset, minf.payloadSize, 'stbl');
+    if (!stbl) continue;
+
+    const stts = findBox(buf, stbl.payloadOffset, stbl.payloadSize, 'stts');
+    if (stts) patchStts(buf, stts, mediaScaleFactor);
+
+    const ctts = findBox(buf, stbl.payloadOffset, stbl.payloadSize, 'ctts');
+    if (ctts) patchCtts(buf, ctts, mediaScaleFactor);
+  }
+
+  return buf;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  EXPRESS ROUTE ENDPOINTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Endpoint 1: High-Fidelity Container Patcher
 app.post('/api/optimize-video', upload.single('video'), (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "Missing file payload." });
-    
-    console.log(`[Patcher Engine] Optimizing: ${req.file.originalname}`);
-    const buf = Buffer.from(req.file.buffer); 
-    
-    const moovs = findBoxes(buf, 'moov', 0, buf.length);
-    for (const moov of moovs) {
-      const mvhd = findChild(buf, moov, 'mvhd');
-      if (mvhd) {
-        const version = buf[mvhd.contentStart];
-        let timescaleOffset = mvhd.contentStart + 12;
-        let durationOffset = mvhd.contentStart + 16;
-        
-        if (version === 1) {
-          timescaleOffset = mvhd.contentStart + 20;
-          durationOffset = mvhd.contentStart + 24;
-        }
-        
-        const oldTimescale = buf.readUInt32BE(timescaleOffset);
-        const targetTimescale = 30000; 
-        const scaleFactor = targetTimescale / oldTimescale;
-        
-        writeU32(buf, timescaleOffset, targetTimescale);
-        
-        if (version === 0) {
-          const oldDuration = buf.readUInt32BE(durationOffset);
-          writeU32(buf, durationOffset, Math.round(oldDuration * scaleFactor));
-        } else {
-          const oldDuration = buf.readBigUInt64BE(durationOffset);
-          buf.writeBigUInt64BE(BigInt(Math.round(Number(oldDuration) * scaleFactor)), durationOffset);
-        }
-      }
-      
-      for (const trak of walkBoxes(buf, moov.contentStart, moov.contentEnd)) {
-        if (trak.type !== 'trak') continue;
-        
-        const mdia = findChild(buf, trak, 'mdia'); if (!mdia) continue;
-        const mdhd = findChild(buf, mdia, 'mdhd'); if (!mdhd) continue;
-        const minf = findChild(buf, mdia, 'minf'); if (!minf) continue;
-        const stbl = findChild(buf, minf, 'stbl'); if (!stbl) continue;
-        
-        const mdhdVersion = buf[mdhd.contentStart];
-        let mediaTimescaleOffset = mdhd.contentStart + 12;
-        let mediaDurationOffset = mdhd.contentStart + 16;
-        
-        if (mdhdVersion === 1) {
-          mediaTimescaleOffset = mdhd.contentStart + 20;
-          mediaDurationOffset = mdhd.contentStart + 24;
-        }
-        
-        const oldMediaTimescale = buf.readUInt32BE(mediaTimescaleOffset);
-        const targetMediaTimescale = 30000;
-        const mediaScaleFactor = targetMediaTimescale / oldMediaTimescale;
-        
-        writeU32(buf, mediaTimescaleOffset, targetMediaTimescale);
-        
-        if (mdhdVersion === 0) {
-          const oldMediaDuration = buf.readUInt32BE(mediaDurationOffset);
-          writeU32(buf, mediaDurationOffset, Math.round(oldMediaDuration * mediaScaleFactor));
-        } else {
-          const oldMediaDuration = buf.readBigUInt64BE(mediaDurationOffset);
-          buf.writeBigUInt64BE(BigInt(Math.round(Number(oldMediaDuration) * mediaScaleFactor)), mediaDurationOffset);
-        }
-
-        const stts = findChild(buf, stbl, 'stts');
-        if (stts) {
-          const entryCount = buf.readUInt32BE(stts.contentStart + 4);
-          let currentOffset = stts.contentStart + 8;
-          
-          for (let i = 0; i < entryCount; i++) {
-            if (currentOffset + 8 > stts.contentEnd) break;
-            const sampleCount = buf.readUInt32BE(currentOffset);
-            const sampleDelta = buf.readUInt32BE(currentOffset + 4);
-            
-            const newDelta = Math.max(1, Math.round(sampleDelta * mediaScaleFactor));
-            writeU32(buf, currentOffset + 4, newDelta);
-            currentOffset += 8;
-          }
-        }
-      }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded. Use field name "video".' });
     }
-    
-    console.log(`[Patcher Engine] Frame Rate container logic successfully compiled with strict duration targets.`);
-    res.setHeader('Content-Type', 'video/mp4');
-    return res.send(buf);
-  } catch (err) { 
-    console.error(err);
-    return res.status(500).json({ error: "Patcher structural compilation exception error." }); 
+
+    console.log(`[AetherEnhance] Processing binary patch for: ${req.file.originalname}`);
+    const patched      = patchMp4(req.file.buffer);
+    const originalName = (req.file.originalname || 'video.mp4').replace(/[^\w.\-]/g, '_');
+    const outputName   = `aetherenhance_${originalName}`;
+
+    res
+      .status(200)
+      .set({
+        'Content-Type':        'video/mp4',
+        'Content-Disposition': `inline; filename="${outputName}"`,
+        'Content-Length':      patched.length,
+        'Cache-Control':       'no-store',
+      })
+      .end(patched);
+
+  } catch (err) {
+    console.error('[AetherEnhance] patchMp4 error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ── ENDPOINT 2: SECURE USER HANDSHAKE ──
+// Endpoint 2: TikTok Auth Token Exchange
 app.post('/api/tiktok/exchange-token', async (req, res) => {
   const { code, code_verifier } = req.body;
   try {
@@ -171,7 +286,7 @@ app.post('/api/tiktok/exchange-token', async (req, res) => {
   }
 });
 
-// ── ENDPOINT 3: USER INFO PROFILE FETCH ROUTE ──
+// Endpoint 3: TikTok Profile Data Fetch
 app.post('/api/tiktok/userinfo', async (req, res) => {
   const { access_token } = req.body;
   try {
@@ -188,7 +303,7 @@ app.post('/api/tiktok/userinfo', async (req, res) => {
   }
 });
 
-// ── ENDPOINT 4: MULTIPART PUBLISH ENGINE ──
+// Endpoint 4: Direct Share Verification
 app.post('/api/tiktok/publish-post', upload.single('video'), async (req, res) => {
   try {
     return res.json({ status: "success", message: "Sandbox route verified." });
