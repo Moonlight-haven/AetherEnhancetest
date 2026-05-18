@@ -474,25 +474,59 @@ const authModal = $('#auth-modal');
 if (!sessionStorage.getItem('studio-auth-dismissed')) {
   setTimeout(() => authModal.classList.add('active'), 2500);
 }
+
 async function openTikTokAuthPopup() {
   authModal.classList.remove('active');
+  
   const codeVerifier = generateCodeVerifier();
   localStorage.setItem('tiktok_code_verifier', codeVerifier);
   const codeChallenge = await generateCodeChallenge(codeVerifier);
-  const authUrl = `https://www.tiktok.com/v2/auth/authorize/?client_key=${API.CLIENT_KEY}&scope=user.info.basic,video.publish,video.upload&response_type=code&redirect_uri=${encodeURIComponent(API.REDIRECT_URI)}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
+  
+  // ═══════════════════════════════════════
+  // FIXED: Strict comma-separated scopes
+  // TikTok V2 expects exactly: user.info.basic,video.upload,video.publish
+  // No encoding of commas, no extra characters
+  // ═══════════════════════════════════════
+  const SCOPES = "user.info.basic,video.upload,video.publish";
+  
+  // Build URL manually to avoid encoding issues
+  const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
+    "?client_key=" + encodeURIComponent(API.CLIENT_KEY) +
+    "&scope=" + SCOPES +
+    "&response_type=code" +
+    "&redirect_uri=" + encodeURIComponent(API.REDIRECT_URI) +
+    "&code_challenge=" + encodeURIComponent(codeChallenge) +
+    "&code_challenge_method=S256";
+  
   const w = 500, h = 700;
   const popup = window.open(authUrl, 'tiktokAuth', `width=${w},height=${h},left=${(screen.width-w)/2},top=${(screen.height-h)/2}`);
+  
   if (!popup) { showToast('⚠ Please allow popups'); return; }
   showToast('🔐 Waiting for TikTok authorization...');
+  
   const pollTimer = setInterval(() => {
-    try { if (popup.location.href.includes(API.REDIRECT_URI)) { clearInterval(pollTimer); const code = new URL(popup.location.href).searchParams.get('code'); popup.close(); if (code) exchangeTokenWithPKCE(code); } } catch(e) {}
+    try { 
+      if (popup.location.href.includes(API.REDIRECT_URI)) { 
+        clearInterval(pollTimer); 
+        const code = new URL(popup.location.href).searchParams.get('code'); 
+        popup.close(); 
+        if (code) exchangeTokenWithPKCE(code); 
+      } 
+    } catch(e) {}
     if (popup.closed) clearInterval(pollTimer);
   }, 500);
+  
   window.addEventListener('message', function pkceHandler(e) {
     if (e.origin !== window.location.origin) return;
-    if (e.data?.code) { window.removeEventListener('message', pkceHandler); clearInterval(pollTimer); if (popup && !popup.closed) popup.close(); exchangeTokenWithPKCE(e.data.code); }
+    if (e.data?.code) { 
+      window.removeEventListener('message', pkceHandler); 
+      clearInterval(pollTimer); 
+      if (popup && !popup.closed) popup.close(); 
+      exchangeTokenWithPKCE(e.data.code); 
+    }
   });
 }
+
 async function exchangeTokenWithPKCE(code) {
   const codeVerifier = localStorage.getItem('tiktok_code_verifier');
   if (!codeVerifier) { showToast('⚠ PKCE verifier missing'); return; }
@@ -553,6 +587,7 @@ function updateProfileUI(profile) {
 $('#modal-authorize-btn').addEventListener('click', openTikTokAuthPopup);
 $('#modal-later-btn').addEventListener('click', () => { authModal.classList.remove('active'); sessionStorage.setItem('studio-auth-dismissed', 'true'); showToast('You can authorize later'); });
 $('#connect-btn').addEventListener('click', openTikTokAuthPopup);
+
 const urlParams = new URLSearchParams(window.location.search);
 const authCode = urlParams.get('code');
 if (authCode) { window.history.replaceState({}, document.title, window.location.pathname); exchangeTokenWithPKCE(authCode); }
