@@ -388,6 +388,9 @@ if (!API) {
   return;
 }
 
+// Ensure clean backend root handling matching server.js structure
+const BACKEND_URL = (API.API_BASE_URL || API.SERVER_API_ROOT || '').replace(/\/api$/, '');
+
 // ═══════════════════════════════════════
 // GLOBAL OPTIMIZED STREAM STORAGE
 // ═══════════════════════════════════════
@@ -482,9 +485,6 @@ async function openTikTokAuthPopup() {
   localStorage.setItem('tiktok_code_verifier', codeVerifier);
   const codeChallenge = await generateCodeChallenge(codeVerifier);
   
-  // ═══════════════════════════════════════
-  // FIXED: Clean V2 scopes directly in the URL
-  // ═══════════════════════════════════════
   const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
     "?client_key=" + encodeURIComponent(API.CLIENT_KEY) +
     "&scope=user.info.basic,video.publish" +
@@ -526,7 +526,7 @@ async function exchangeTokenWithPKCE(code) {
   const codeVerifier = localStorage.getItem('tiktok_code_verifier');
   if (!codeVerifier) { showToast('⚠ PKCE verifier missing'); return; }
   try {
-    const res = await fetch(`${API.SERVER_API_ROOT}/tiktok/exchange-token`, {
+    const res = await fetch(`${BACKEND_URL}/api/tiktok/exchange-token`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, code_verifier: codeVerifier })
     });
@@ -554,10 +554,7 @@ async function exchangeTokenWithPKCE(code) {
 // ═══════════════════════════════════════
 async function fetchUserProfile(token) {
   try {
-    const API = window.config || window.AETHER_API_CONFIG;
-    const baseUrl = API.API_BASE_URL || API.SERVER_API_ROOT;
-    
-    const res = await fetch(`${baseUrl}/tiktok/userinfo`, {
+    const res = await fetch(`${BACKEND_URL}/api/tiktok/userinfo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ access_token: token })
@@ -654,35 +651,41 @@ const unlinkVerifyInput = $('#unlink-verify-input');
 const unlinkConfirmBtn = $('#unlink-confirm-btn');
 const unlinkConfirmName = $('#unlink-confirm-name');
 
-$('#unlink-btn').addEventListener('click', function(e) {
-  e.preventDefault(); e.stopPropagation();
-  const currentName = state.userInfo?.display_name || state.userInfo?.username || 'Unknown';
-  unlinkConfirmName.textContent = currentName;
-  unlinkVerifyInput.value = '';
-  unlinkConfirmBtn.style.opacity = '0.5';
-  unlinkConfirmBtn.style.cursor = 'not-allowed';
-  unlinkModal.classList.add('active');
-});
-unlinkVerifyInput.addEventListener('input', function() {
-  const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
-  if (this.value.trim() === currentName) {
-    unlinkConfirmBtn.style.opacity = '1';
-    unlinkConfirmBtn.style.cursor = 'pointer';
-  } else {
+if ($('#unlink-btn')) {
+  $('#unlink-btn').addEventListener('click', function(e) {
+    e.preventDefault(); e.stopPropagation();
+    const currentName = state.userInfo?.display_name || state.userInfo?.username || 'Unknown';
+    unlinkConfirmName.textContent = currentName;
+    unlinkVerifyInput.value = '';
     unlinkConfirmBtn.style.opacity = '0.5';
     unlinkConfirmBtn.style.cursor = 'not-allowed';
-  }
-});
-$('#unlink-confirm-btn').addEventListener('click', function() {
-  const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
-  if (unlinkVerifyInput.value.trim() === currentName) {
-    unlinkModal.classList.remove('active');
-    unlinkTikTokAccount();
-  } else {
-    showToast('⚠ Username verification failed');
-  }
-});
-$('#unlink-cancel-btn').addEventListener('click', () => { unlinkModal.classList.remove('active'); });
+    unlinkModal.classList.add('active');
+  });
+}
+if (unlinkVerifyInput) {
+  unlinkVerifyInput.addEventListener('input', function() {
+    const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
+    if (this.value.trim() === currentName) {
+      unlinkConfirmBtn.style.opacity = '1';
+      unlinkConfirmBtn.style.cursor = 'pointer';
+    } else {
+      unlinkConfirmBtn.style.opacity = '0.5';
+      unlinkConfirmBtn.style.cursor = 'not-allowed';
+    }
+  });
+}
+if (unlinkConfirmBtn) {
+  unlinkConfirmBtn.addEventListener('click', function() {
+    const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
+    if (unlinkVerifyInput.value.trim() === currentName) {
+      unlinkModal.classList.remove('active');
+      unlinkTikTokAccount();
+    } else {
+      showToast('⚠ Username verification failed');
+    }
+  });
+}
+if ($('#unlink-cancel-btn')) $('#unlink-cancel-btn').addEventListener('click', () => { unlinkModal.classList.remove('active'); });
 
 if (sessionStorage.getItem('studio-authorized') === 'true') {
   state.isAuthorized = true;
@@ -759,7 +762,7 @@ function resetOptimizeButton() {
 }
 function setDownloadPatchedButton() {
   const btn = $('#main-upload-btn');
-  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>⬇ Download Patched Master';
+  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>⬇ Deploy Directly to TikTok';
   btn.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)';
   btn.style.color = '#050505';
   btn.style.fontWeight = '800';
@@ -846,7 +849,7 @@ captionInput.addEventListener('input', () => {
 async function searchCreators(query) {
   if (!query) { $('#mention-results').classList.remove('active'); return; }
   try {
-    const res = await fetch(`${API.SERVER_API_ROOT}/tiktok/search-creator`, {
+    const res = await fetch(`${BACKEND_URL}/api/tiktok/search-creator`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, access_token: state.accessToken })
     });
@@ -954,7 +957,7 @@ async function executeOptimizePipeline() {
     formData.append('video', state.videoFile);
     let optimizedBlob;
     try {
-      const res = await fetch(`${API.SERVER_API_ROOT}/optimize-video`, { method: 'POST', body: formData });
+      const res = await fetch(`${BACKEND_URL}/api/optimize-video`, { method: 'POST', body: formData });
       if (res.ok) { optimizedBlob = await res.blob(); }
       else { throw new Error('Server returned: ' + res.status); }
     } catch (err) {
@@ -968,7 +971,7 @@ async function executeOptimizePipeline() {
     await new Promise(r => setTimeout(r, 600));
     setStep(3, 'Optimization complete — Master patched', 100);
     progressBar.style.background = 'var(--green)';
-    subtitle.textContent = 'Optimization complete — Download ready';
+    subtitle.textContent = 'Optimization complete — Deploy ready';
     $('#stat-fps').textContent = '✓ Managed';
     $('#stat-fps-status').textContent = '✓ Managed';
     $('#stat-fps-status').className = 'status-indicator green';
@@ -979,7 +982,7 @@ async function executeOptimizePipeline() {
       setMetadataFieldsDisabled(false);
       setDownloadPatchedButton();
       if (state.isAuthorized) { $('#header-upload-btn').disabled = false; }
-      showToast('✓ Master patched — Ready to download');
+      showToast('✓ Master patched — Ready to upload');
     }, 1200);
   } catch (err) {
     overlay.classList.remove('active');
@@ -990,59 +993,62 @@ async function executeOptimizePipeline() {
 }
 
 // ═══════════════════════════════════════
-// DOWNLOAD PIPELINE
+// DIRECT DEPLOY TO TIKTOK PIPELINE
 // ═══════════════════════════════════════
 async function executeDownloadPipeline() {
   if (!state.isOptimized) return executeOptimizePipeline();
   if (!window.AETHER_OPTIMIZED_BLOB) return showToast('⚠ No optimized stream found');
+  if (!state.isAuthorized || !state.accessToken) return showToast('⚠ Please authorize TikTok first');
+
   const overlay = $('#processing-overlay');
   const subtitle = $('#processing-subtitle');
   const title = $('#processing-title');
   const progressBar = $('#progress-bar-fill');
-  const steps = ['proc-step-1', 'proc-step-2', 'proc-step-3', 'proc-step-4'];
+  
   progressBar.style.width = '0%';
   progressBar.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)';
-  steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
-  $('#proc-step-1').classList.add('active');
-  title.textContent = 'Downloading Patched Master';
-  subtitle.textContent = 'Preparing high-fidelity download...';
+  title.textContent = 'Deploying Directly to TikTok';
+  subtitle.textContent = 'Pushing optimized master file to TikTok core servers...';
   overlay.classList.add('active');
+  
   $('#header-upload-btn').disabled = true;
   $('#main-upload-btn').disabled = true;
-  const downloadUrl = URL.createObjectURL(window.AETHER_OPTIMIZED_BLOB);
-  const a = document.createElement('a');
-  a.href = downloadUrl;
-  a.download = 'aether_master_edit_patched.mp4';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(downloadUrl);
-  let percent = 1;
-  progressBar.style.width = '1%';
-  const countInterval = setInterval(() => {
-    percent += Math.floor(Math.random() * 6) + 1;
-    if (percent >= 100) { percent = 100; clearInterval(countInterval); }
-    progressBar.style.width = percent + '%';
-    subtitle.textContent = 'Downloading... ' + percent + '%';
-  }, 120);
-  setTimeout(() => {
-    clearInterval(countInterval);
+
+  try {
+    const formData = new FormData();
+    // Convert the optimized blob back to a file payload matching server.js requirements
+    const filePayload = new File([window.AETHER_OPTIMIZED_BLOB], "upload.mp4", { type: "video/mp4" });
+    formData.append('video', filePayload);
+    formData.append('access_token', state.accessToken);
+
+    const res = await fetch(`${BACKEND_URL}/api/tiktok/publish-post`, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!res.ok) {
+      const errDetails = await res.json().catch(() => ({}));
+      throw new Error(errDetails.error || `Server responded with status ${res.status}`);
+    }
+
     progressBar.style.width = '100%';
     progressBar.style.background = 'var(--green)';
-    subtitle.textContent = 'Download complete — aether_master_edit_patched.mp4';
-    steps.forEach(id => { const el = $('#' + id); if (el) { el.classList.remove('active'); el.classList.add('done'); } });
+    subtitle.textContent = 'Successfully uploaded directly to TikTok!';
+    showToast('✓ Video published successfully to TikTok!');
+    
     setTimeout(() => {
       overlay.classList.remove('active');
-      progressBar.style.width = '0%';
-      progressBar.style.background = 'linear-gradient(90deg, var(--tt-red), var(--tt-cyan))';
-      steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
-      $('#proc-step-1').classList.add('active');
       $('#header-upload-btn').disabled = false;
       $('#main-upload-btn').disabled = false;
-      setDownloadPatchedButton();
-      showToast('✓ Master patched file downloaded');
     }, 2000);
-  }, 2500);
+
+  } catch (err) {
+    overlay.classList.remove('active');
+    $('#header-upload-btn').disabled = false;
+    $('#main-upload-btn').disabled = false;
+    showToast('⚠ Upload failed: ' + err.message);
+    console.error('Upload Error:', err);
+  }
 }
 
 // ═══════════════════════════════════════
