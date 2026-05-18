@@ -483,19 +483,15 @@ async function openTikTokAuthPopup() {
   const codeChallenge = await generateCodeChallenge(codeVerifier);
   
   // ═══════════════════════════════════════
-  // FIXED: Strict TikTok V2 scopes
-  // Must be EXACTLY: user.info.basic,video.upload,video.publish
-  // No spaces, no "or" words, no extra characters
+  // FIXED: Clean V2 scopes directly in the URL
   // ═══════════════════════════════════════
-  // ❌ REMOVE THIS BROKEN BLOCK:
-const scopes = 'user.info.basic,video.publish';
-const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
-  "?client_key=" + encodeURIComponent(API.CLIENT_KEY) +
-  "&scope=user.info.basic video.upload video.publish" +
-  "&response_type=code" +
-  "&redirect_uri=" + encodeURIComponent(API.REDIRECT_URI) +
-  "&code_challenge=" + encodeURIComponent(codeChallenge) +
-  "&code_challenge_method=S256";
+  const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
+    "?client_key=" + encodeURIComponent(API.CLIENT_KEY) +
+    "&scope=user.info.basic,video.publish" +
+    "&response_type=code" +
+    "&redirect_uri=" + encodeURIComponent(API.REDIRECT_URI) +
+    "&code_challenge=" + encodeURIComponent(codeChallenge) +
+    "&code_challenge_method=S256";
   
   const w = 500, h = 700;
   const popup = window.open(authUrl, 'tiktokAuth', `width=${w},height=${h},left=${(screen.width-w)/2},top=${(screen.height-h)/2}`);
