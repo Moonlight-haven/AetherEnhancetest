@@ -5,6 +5,9 @@ const cors = require('cors');
 const axios = require('axios');
 const multer = require('multer');
 const dotenv = require('dotenv');
+const ffmpeg = require('fluent-ffmpeg');
+const path = require('path');
+const fs = require('fs');
 
 dotenv.config();
 
@@ -12,10 +15,16 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// ─── Multer – memory storage, 2 GB cap ────────────────────────────────────────
+// Ensure local uploads directory exists cleanly on start
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// ─── Multer Configuration – Disk-backed, 500 MB Cap ───────────────────────────
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 },
+  dest: 'uploads/',
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB headroom safety
 });
 
 const TIKTOK_CONFIG = {
@@ -24,247 +33,78 @@ const TIKTOK_CONFIG = {
   REDIRECT_URI: "https://moonlight-haven.github.io/AetherEnhancetest/studio.html"
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  LOW-LEVEL BUFFER HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function readU32(buf, offset) {
-  if (offset + 4 > buf.length) throw new RangeError(`readU32 OOB @ ${offset}`);
-  return buf.readUInt32BE(offset);
-}
-
-function writeU32(buf, offset, value) {
-  if (offset + 4 > buf.length) throw new RangeError(`writeU32 OOB @ ${offset}`);
-  buf.writeUInt32BE(value >>> 0, offset);
-}
-
-function readU64(buf, offset) {
-  if (offset + 8 > buf.length) throw new RangeError(`readU64 OOB @ ${offset}`);
-  const hi = buf.readUInt32BE(offset);
-  const lo = buf.readUInt32BE(offset + 4);
-  return hi * 0x1_0000_0000 + lo;
-}
-
-function writeU64(buf, offset, value) {
-  if (offset + 8 > buf.length) throw new RangeError(`writeU64 OOB @ ${offset}`);
-  const hi = Math.floor(value / 0x1_0000_0000);
-  const lo = value >>> 0;
-  buf.writeUInt32BE(hi >>> 0, offset);
-  buf.writeUInt32BE(lo, offset + 4);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  ATOM / BOX WALKER
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function* walkBoxes(buf, start, end) {
-  let pos = start;
-  while (pos + 8 <= end) {
-    const size32 = readU32(buf, pos);
-    const name   = buf.slice(pos + 4, pos + 8).toString('latin1');
-
-    let totalSize;
-    let headerSize;
-
-    if (size32 === 1) {
-      if (pos + 16 > end) break;
-      totalSize  = readU64(buf, pos + 8);
-      headerSize = 16;
-    } else if (size32 === 0) {
-      totalSize  = end - pos;
-      headerSize = 8;
-    } else {
-      totalSize  = size32;
-      headerSize = 8;
+// ─── Direct IO Cleanup Helper ────────────────────────────────────────────────
+function safeUnlink(filePath) {
+  if (!filePath) return;
+  fs.unlink(filePath, (err) => {
+    if (err && err.code !== 'ENOENT') {
+      console.error(`[AetherEnhance] Storage cleanup failed for ${filePath}:`, err.message);
     }
-
-    if (totalSize < headerSize || pos + totalSize > end) break;
-
-    yield {
-      name,
-      offset:        pos,
-      headerSize,
-      payloadOffset: pos + headerSize,
-      payloadSize:   totalSize - headerSize,
-      totalSize,
-    };
-
-    pos += totalSize;
-  }
-}
-
-function findBox(buf, containerPayloadOffset, containerPayloadSize, targetName) {
-  for (const box of walkBoxes(buf, containerPayloadOffset, containerPayloadOffset + containerPayloadSize)) {
-    if (box.name === targetName) return box;
-  }
-  return null;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  PATCH HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const TARGET_TIMESCALE = 30_000;
-
-function patchMvhd(buf, box) {
-  const p       = box.payloadOffset;  
-  const version = buf[p];
-
-  if (version === 0) {
-    const oldTimescale = readU32(buf, p + 12);
-    const oldDuration  = readU32(buf, p + 16);
-    const scale        = TARGET_TIMESCALE / oldTimescale;
-    const newDuration  = Math.round(oldDuration * scale);
-
-    writeU32(buf, p + 12, TARGET_TIMESCALE);
-    writeU32(buf, p + 16, newDuration);
-
-    return scale;
-  } else {
-    const oldTimescale = readU32(buf, p + 20);
-    const oldDuration  = readU64(buf, p + 24);
-    const scale        = TARGET_TIMESCALE / oldTimescale;
-    const newDuration  = Math.round(oldDuration * scale);
-
-    writeU32(buf, p + 20, TARGET_TIMESCALE);
-    writeU64(buf, p + 24, newDuration);
-
-    return scale;
-  }
-}
-
-function patchMdhd(buf, box) {
-  const p       = box.payloadOffset;
-  const version = buf[p];
-
-  if (version === 0) {
-    const oldTimescale = readU32(buf, p + 12);
-    const oldDuration  = readU32(buf, p + 16);
-    const scale        = TARGET_TIMESCALE / oldTimescale;
-
-    writeU32(buf, p + 12, TARGET_TIMESCALE);
-    writeU32(buf, p + 16, Math.round(oldDuration * scale));
-
-    return scale;
-  } else {
-    const oldTimescale = readU32(buf, p + 20);
-    const oldDuration  = readU64(buf, p + 24);
-    const scale        = TARGET_TIMESCALE / oldTimescale;
-
-    writeU32(buf, p + 20, TARGET_TIMESCALE);
-    writeU64(buf, p + 24, Math.round(oldDuration * scale));
-
-    return scale;
-  }
-}
-
-function patchStts(buf, box, scaleFactor) {
-  const p          = box.payloadOffset;
-  const entryCount = readU32(buf, p + 4);
-  let   cursor     = p + 8;
-
-  for (let i = 0; i < entryCount; i++) {
-    if (cursor + 8 > buf.length) break;
-
-    const delta    = readU32(buf, cursor + 4);
-    const newDelta = Math.max(1, Math.round(delta * scaleFactor));
-    writeU32(buf, cursor + 4, newDelta);
-
-    cursor += 8;
-  }
-}
-
-function patchCtts(buf, box, scaleFactor) {
-  const p          = box.payloadOffset;
-  const version    = buf[p];
-  const entryCount = readU32(buf, p + 4);
-  let   cursor     = p + 8;
-
-  for (let i = 0; i < entryCount; i++) {
-    if (cursor + 8 > buf.length) break;
-
-    if (version === 1) {
-      const offset    = buf.readInt32BE(cursor + 4);
-      const newOffset = Math.round(offset * scaleFactor);
-      buf.writeInt32BE(newOffset, cursor + 4);
-    } else {
-      const offset    = readU32(buf, cursor + 4);
-      const newOffset = Math.round(offset * scaleFactor);
-      writeU32(buf, cursor + 4, newOffset);
-    }
-
-    cursor += 8;
-  }
-}
-
-function patchMp4(inputBuffer) {
-  const buf = Buffer.from(inputBuffer);
-
-  const moov = findBox(buf, 0, buf.length, 'moov');
-  if (!moov) throw new Error('No moov box found – is this a valid MP4?');
-
-  const mvhd = findBox(buf, moov.payloadOffset, moov.payloadSize, 'mvhd');
-  if (!mvhd) throw new Error('No mvhd box found inside moov');
-
-  const movieScaleFactor = patchMvhd(buf, mvhd);
-
-  for (const trak of walkBoxes(buf, moov.payloadOffset, moov.payloadOffset + moov.payloadSize)) {
-    if (trak.name !== 'trak') continue;
-
-    const mdia = findBox(buf, trak.payloadOffset, trak.payloadSize, 'mdia');
-    if (!mdia) continue;
-
-    const mdhd = findBox(buf, mdia.payloadOffset, mdia.payloadSize, 'mdhd');
-    if (!mdhd) continue;
-
-    const mediaScaleFactor = patchMdhd(buf, mdhd);
-
-    const minf = findBox(buf, mdia.payloadOffset, mdia.payloadSize, 'minf');
-    if (!minf) continue;
-
-    const stbl = findBox(buf, minf.payloadOffset, minf.payloadSize, 'stbl');
-    if (!stbl) continue;
-
-    const stts = findBox(buf, stbl.payloadOffset, stbl.payloadSize, 'stts');
-    if (stts) patchStts(buf, stts, mediaScaleFactor);
-
-    const ctts = findBox(buf, stbl.payloadOffset, stbl.payloadSize, 'ctts');
-    if (ctts) patchCtts(buf, ctts, mediaScaleFactor);
-  }
-
-  return buf;
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  EXPRESS ROUTE ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Endpoint 1: High-Fidelity Container Patcher
+// Endpoint 1: High-Fidelity Processing Pipeline
 app.post('/api/optimize-video', upload.single('video'), (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded. Use field name "video".' });
-    }
-
-    console.log(`[AetherEnhance] Processing binary patch for: ${req.file.originalname}`);
-    const patched      = patchMp4(req.file.buffer);
-    const originalName = (req.file.originalname || 'video.mp4').replace(/[^\w.\-]/g, '_');
-    const outputName   = `aetherenhance_${originalName}`;
-
-    res
-      .status(200)
-      .set({
-        'Content-Type':        'video/mp4',
-        'Content-Disposition': `inline; filename="${outputName}"`,
-        'Content-Length':      patched.length,
-        'Cache-Control':       'no-store',
-      })
-      .end(patched);
-
-  } catch (err) {
-    console.error('[AetherEnhance] patchMp4 error:', err);
-    res.status(500).json({ error: err.message });
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded. Use field name "video".' });
   }
+
+  const inputPath = req.file.path;
+  const outputPath = path.join(UPLOADS_DIR, `aetherenhance_${req.file.filename}.mp4`);
+
+  console.log(`[AetherEnhance] Initializing FFmpeg processing flow for: ${req.file.originalname}`);
+
+  ffmpeg(inputPath)
+    .videoCodec('libx264')
+    .outputOptions([
+      '-profile:v high',      // H.264 High Profile block allocation
+      '-level:v 4.2',         // Level 4.2 profile constraints matching modern decoders
+      '-pix_fmt yuv420p',     // Standardized mobile playback color layout
+      '-crf 18',              // Visually lossless compression threshold
+      '-g 30',                // Static Group of Pictures (GOP) boundaries
+      '-movflags +faststart'  // Relocate moov atom block to engine head
+    ])
+    .audioCodec('copy')       // Direct raw bitstream transfer (zero re-encode latency)
+    .format('mp4')
+    .output(outputPath)
+    .on('start', (cmd) => {
+      console.log('◈ [FFmpeg Processing Subsystem Active]:', cmd);
+    })
+    .on('progress', (progress) => {
+      const percentage = progress.percent ?? 0;
+      console.log(`[AetherEnhance] Progress: ${percentage.toFixed(1)}% | Current FPS: ${progress.currentFps}`);
+    })
+    .on('error', (err, _stdout, stderr) => {
+      console.error('[AetherEnhance] Processing engine crash:', err.message);
+      console.error('[AetherEnhance] Stderr Dump:\n', stderr);
+
+      safeUnlink(inputPath);
+      safeUnlink(outputPath);
+
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Video conversion engine failure.', detail: err.message });
+      }
+    })
+    .on('end', () => {
+      console.log('[AetherEnhance] Encoding pass complete. Syncing file dispatch loop...');
+      const outputName = `aetherenhance_${req.file.originalname || 'output.mp4'}`;
+
+      res.download(outputPath, outputName, (downloadErr) => {
+        // Enforce cleanup immediately on file transfer termination
+        safeUnlink(inputPath);
+        safeUnlink(outputPath);
+
+        if (downloadErr && !res.headersSent) {
+          console.error('[AetherEnhance] Client output dispatch error:', downloadErr.message);
+          res.status(500).json({ error: 'File delivery infrastructure failure.' });
+        }
+      });
+    })
+    .run();
 });
 
 // Endpoint 2: TikTok Auth Token Exchange
