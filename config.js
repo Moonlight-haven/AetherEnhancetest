@@ -5,5 +5,6 @@ const AETHER_API_CONFIG = {
   SERVER_API_ROOT: "https://aether-backend-engine.onrender.com/api"
 };
 
-// Make it accessible globally across all your other scripts
+// Make it accessible globally across all your other scripts explicitly
 window.AETHER_API_CONFIG = AETHER_API_CONFIG;
+window.config = AETHER_API_CONFIG; // Safety fallback to kill any ghost config checks
