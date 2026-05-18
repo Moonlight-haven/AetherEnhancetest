@@ -483,16 +483,16 @@ async function openTikTokAuthPopup() {
   const codeChallenge = await generateCodeChallenge(codeVerifier);
   
   // ═══════════════════════════════════════
-  // FIXED: Strict comma-separated scopes
-  // TikTok V2 expects exactly: user.info.basic,video.upload,video.publish
-  // No encoding of commas, no extra characters
+  // FIXED: Strict TikTok V2 scopes
+  // Must be EXACTLY: user.info.basic,video.upload,video.publish
+  // No spaces, no "or" words, no extra characters
   // ═══════════════════════════════════════
-  const SCOPES = "user.info.basic,video.upload,video.publish";
+  const scopes = 'user.info.basic,video.upload,video.publish';
   
-  // Build URL manually to avoid encoding issues
+  // Build URL with string concatenation to avoid any encoding of the scopes string
   const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
     "?client_key=" + encodeURIComponent(API.CLIENT_KEY) +
-    "&scope=" + SCOPES +
+    "&scope=" + scopes +
     "&response_type=code" +
     "&redirect_uri=" + encodeURIComponent(API.REDIRECT_URI) +
     "&code_challenge=" + encodeURIComponent(codeChallenge) +
