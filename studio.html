@@ -554,7 +554,10 @@ async function exchangeTokenWithPKCE(code) {
 // ═══════════════════════════════════════
 async function fetchUserProfile(token) {
   try {
-    const res = await fetch(`${API.SERVER_API_ROOT}/tiktok/userinfo`, {
+    const API = window.config || window.AETHER_API_CONFIG;
+    const baseUrl = API.API_BASE_URL || API.SERVER_API_ROOT;
+    
+    const res = await fetch(`${baseUrl}/tiktok/userinfo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ access_token: token })
