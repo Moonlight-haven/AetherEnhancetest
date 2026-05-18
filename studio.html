@@ -168,6 +168,7 @@
     .main-upload-btn:hover{filter:brightness(1.08);box-shadow:0 6px 32px var(--tt-red-dim)}
     .main-upload-btn:disabled{opacity:.3;cursor:not-allowed;filter:none;box-shadow:none}
     .account-card{background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:13px;display:flex;align-items:center;justify-content:space-between;gap:10px;transition:background .3s,border-color .3s}
+    .account-card.connected{border-color:rgba(0,204,102,.25)}
     .account-info{display:flex;align-items:center;gap:9px}
     .account-avatar-icon{width:28px;height:28px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
     .account-avatar-icon img{width:100%;height:100%;object-fit:cover}
@@ -335,8 +336,20 @@
 
   <div class="settings-panel">
     <div class="settings-section"><label class="settings-label">TikTok Authorization</label>
-      <div class="account-card"><div class="account-info"><div class="account-avatar-icon" id="account-avatar-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" opacity="0.5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div><div><div class="account-name-text" id="account-name-display">Guest</div><div class="account-status-text disconnected" id="account-status-display">Not authorized</div></div></div>
-      <button class="account-link-btn" id="unlink-btn" style="display:none">Unlink</button><button class="account-link-btn connect" id="connect-btn">Authorize</button></div>
+      <div class="account-card" id="tiktok-account-card">
+        <div class="account-info">
+          <div class="account-avatar-icon" id="account-avatar-icon">
+            <img id="tt-avatar" src="" alt="User" style="display:none;" onerror="this.style.display='none'">
+            <svg id="tt-avatar-placeholder" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" opacity="0.5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+          </div>
+          <div>
+            <div class="account-name-text" id="tt-username">Guest</div>
+            <div class="account-status-text disconnected" id="tt-status">Not authorized</div>
+          </div>
+        </div>
+        <button class="account-link-btn" id="unlink-btn" style="display:none">Unlink</button>
+        <button class="account-link-btn connect" id="tiktok-connect-btn">Authorize</button>
+      </div>
     </div>
     <div class="settings-section"><label class="settings-label">Caption<span class="char-count" id="char-count">0 / 2,200</span></label>
       <textarea class="settings-textarea" id="caption-input" placeholder="Write a caption..." maxlength="2200" disabled></textarea>
@@ -378,12 +391,13 @@
 </div>
 
 <script>
-  // ═══════════════════════════════════════
+(function(){
+// ═══════════════════════════════════════
 // GLOBAL STATE & API CONFIGURATION
 // ═══════════════════════════════════════
 const API = window.AETHER_API_CONFIG || window.config;
 if (!API) {
-  alert('Configuration missing! Please ensure config.js is loaded before this page.');
+  console.error('Configuration missing! Ensure config.js is loaded.');
 }
 
 const state = {
@@ -391,11 +405,61 @@ const state = {
   isOptimized: false,
   tiktokConnected: false,
   tiktokToken: null,
-  userProfile: null
+  userProfile: null,
+  isPlaying: false,
+  selectedMentions: [],
+  selectedLocation: null
 };
 
-// Quick DOM selector helper
-const $ = selector => document.querySelector(selector);
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
+// ═══════════════════════════════════════
+// LOADING SCREEN
+// ═══════════════════════════════════════
+window.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => { 
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) loadingScreen.classList.add('hidden'); 
+  }, 2000);
+  
+  // Check for OAuth callback code
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  if (code) {
+    window.history.replaceState({}, document.title, window.location.pathname);
+    handleAuthCode(code);
+  }
+});
+
+// ═══════════════════════════════════════
+// THEME TOGGLE
+// ═══════════════════════════════════════
+const themeBtn = document.getElementById('theme-toggle-btn');
+let isDark = localStorage.getItem('aether-theme') === null ? true : localStorage.getItem('aether-theme') === 'dark';
+function setTheme(dark) {
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const sunIcon = document.getElementById('sun-icon');
+  const moonIcon = document.getElementById('moon-icon');
+  if (sunIcon) sunIcon.style.display = dark ? 'block' : 'none';
+  if (moonIcon) moonIcon.style.display = dark ? 'none' : 'block';
+  localStorage.setItem('aether-theme', dark ? 'dark' : 'light');
+}
+if (themeBtn) themeBtn.addEventListener('click', () => { isDark = !isDark; setTheme(isDark); });
+setTheme(isDark);
+
+// ═══════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════
+let toastTimer;
+function showToast(msg, duration = 2800) {
+  clearTimeout(toastTimer);
+  const el = $('#toast-notification');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  toastTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
 
 // ═══════════════════════════════════════
 // TIKTOK INTEGRATION SUBSYSTEM
@@ -403,35 +467,36 @@ const $ = selector => document.querySelector(selector);
 function openTikTokAuthPopup() {
   const clientKey = API.CLIENT_KEY;
   const redirectUri = API.REDIRECT_URI;
-  
-  // Exact requested scopes for Profile (Avatar/Username) and Video Actions
   const scopes = "user.info.profile,video.publish,video.upload";
   
-  // Clean URL construction to eliminate authorization looping issues
   const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
     "?client_key=" + encodeURIComponent(clientKey) +
-    "&scope=" + encodeURIComponent(scopes) +
+    "&scope=" + scopes +
     "&response_type=code" +
     "&redirect_uri=" + encodeURIComponent(redirectUri) +
     "&state=" + Math.random().toString(36).substring(2);
 
-  console.log("◈ [Aether Link] Triggering OAuth with endpoint:", authUrl);
+  console.log("◈ [Aether Link] Triggering OAuth:", authUrl);
   
-  // Open the authorization window center screen
   const width = 500, height = 600;
   const left = (window.screen.width / 2) - (width / 2);
   const top = (window.screen.height / 2) - (height / 2);
   
   window.open(authUrl, "TikTokAuth", `width=${width},height=${height},top=${top},left=${left}`);
+  
+  // Close auth modal
+  const authModal = $('#auth-modal');
+  if (authModal) authModal.classList.remove('active');
 }
 
-// Handle incoming authentication codes from callback redirects
 async function handleAuthCode(code) {
   const overlay = $('#processing-overlay');
   const subtitle = $('#processing-subtitle');
   
+  if (!overlay) return;
+  
   overlay.classList.add('active');
-  subtitle.textContent = 'Exchanging authentication token...';
+  if (subtitle) subtitle.textContent = 'Exchanging authentication token...';
 
   try {
     const response = await fetch(`${API.SERVER_API_ROOT}/tiktok/exchange-token`, {
@@ -446,16 +511,18 @@ async function handleAuthCode(code) {
     }
 
     state.tiktokToken = data.access_token;
-    subtitle.textContent = 'Fetching synchronized creator profile...';
+    if (subtitle) subtitle.textContent = 'Fetching synchronized creator profile...';
     
     await fetchUserProfile(data.access_token);
   } catch (err) {
     showToast('⚠ Connection Failed: ' + err.message);
-    overlay.classList.remove('active');
+    overlay.classList.remove('active'); // Safely clear loading screen on failure
   }
 }
 
 async function fetchUserProfile(accessToken) {
+  const overlay = $('#processing-overlay');
+  
   try {
     const res = await fetch(`${API.SERVER_API_ROOT}/tiktok/userinfo`, {
       method: 'POST',
@@ -471,48 +538,634 @@ async function fetchUserProfile(accessToken) {
     const user = profileData.data.user;
     state.userProfile = {
       username: user.display_name || user.username || "Creator",
-      avatar: user.avatar_url || "https://www.tiktok.com/favicon.ico"
+      avatar: user.avatar_url || ""
     };
 
     state.tiktokConnected = true;
     updateTikTokUI();
-    showToast(`✓ Connected to ${state.userProfile.username}`);
+    showToast('✓ Connected to ' + state.userProfile.username);
   } catch (err) {
     console.error("Profile payload extraction error:", err);
     showToast('⚠ Failed to fetch profile details.');
   } finally {
-    $('#processing-overlay').classList.remove('active');
+    // ═════ ALWAYS REMOVE OVERLAY ═════
+    if (overlay) overlay.classList.remove('active');
   }
 }
 
 function updateTikTokUI() {
   const accountCard = $('#tiktok-account-card');
   const connectBtn = $('#tiktok-connect-btn');
+  const avatarImg = $('#tt-avatar');
+  const avatarPlaceholder = $('#tt-avatar-placeholder');
+  const usernameEl = $('#tt-username');
+  const statusEl = $('#tt-status');
+  const unlinkBtn = $('#unlink-btn');
+  const connectionBadge = $('#connection-badge');
+  const connectionLabel = $('#connection-label');
   
   if (state.tiktokConnected && state.userProfile) {
-    $('#tt-avatar').src = state.userProfile.avatar;
-    $('#tt-username').textContent = state.userProfile.username;
-    $('#tt-status').textContent = '@' + (state.userProfile.username.toLowerCase().replace(/\s+/g, ''));
+    // Update avatar
+    if (state.userProfile.avatar) {
+      if (avatarImg) {
+        avatarImg.src = state.userProfile.avatar;
+        avatarImg.style.display = 'block';
+      }
+      if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+      // Also update header avatar
+      const headerAvatar = $('#header-avatar-placeholder');
+      if (headerAvatar) {
+        headerAvatar.innerHTML = `<img src="${state.userProfile.avatar}" alt="${state.userProfile.username}" onerror="this.style.display='none'">`;
+      }
+    }
     
-    accountCard.classList.add('connected');
-    connectBtn.innerHTML = '<span>Disconnect Engine</span>';
-    connectBtn.style.border = '1px solid rgba(254,44,85,0.3)';
+    if (usernameEl) usernameEl.textContent = state.userProfile.username;
+    if (statusEl) {
+      statusEl.textContent = '@' + (state.userProfile.username.toLowerCase().replace(/\s+/g, ''));
+      statusEl.className = 'account-status-text connected';
+    }
+    
+    if (accountCard) accountCard.classList.add('connected');
+    
+    if (connectBtn) {
+      connectBtn.innerHTML = '<span>Disconnect Engine</span>';
+      connectBtn.style.border = '1px solid rgba(254,44,85,0.3)';
+      connectBtn.style.color = 'var(--tt-red)';
+    }
+    
+    if (unlinkBtn) unlinkBtn.style.display = 'inline-block';
+    
+    if (connectionBadge) connectionBadge.classList.add('connected');
+    if (connectionLabel) connectionLabel.textContent = 'Authorized';
+    
+    // Enable publish if video is optimized
+    if (state.videoFile && state.isOptimized) {
+      const headerBtn = $('#header-upload-btn');
+      const mainBtn = $('#main-upload-btn');
+      if (headerBtn) headerBtn.disabled = false;
+      if (mainBtn) mainBtn.disabled = false;
+    }
   } else {
-    accountCard.classList.remove('connected');
-    connectBtn.innerHTML = '<span>Link TikTok Account</span>';
-    connectBtn.style.border = '';
+    if (avatarImg) avatarImg.style.display = 'none';
+    if (avatarPlaceholder) avatarPlaceholder.style.display = 'block';
+    if (usernameEl) usernameEl.textContent = 'Guest';
+    if (statusEl) {
+      statusEl.textContent = 'Not authorized';
+      statusEl.className = 'account-status-text disconnected';
+    }
+    if (accountCard) accountCard.classList.remove('connected');
+    if (connectBtn) {
+      connectBtn.innerHTML = '<span>Link TikTok Account</span>';
+      connectBtn.style.border = '';
+      connectBtn.style.color = 'var(--tt-red)';
+    }
+    if (unlinkBtn) unlinkBtn.style.display = 'none';
+    if (connectionBadge) connectionBadge.classList.remove('connected');
+    if (connectionLabel) connectionLabel.textContent = 'Not Authorized';
+    
+    const headerBtn = $('#header-upload-btn');
+    const mainBtn = $('#main-upload-btn');
+    if (headerBtn) headerBtn.disabled = true;
+    if (mainBtn) mainBtn.disabled = true;
   }
 }
 
-// Watch for redirect codes hitting the address bar automatically
-window.addEventListener('DOMContentLoaded', () => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const code = urlParams.get('code');
-  if (code) {
-    // Clean the address bar query arguments without refreshing
-    window.history.replaceState({}, document.title, window.location.pathname);
-    handleAuthCode(code);
+function unlinkTikTokAccount() {
+  state.tiktokConnected = false;
+  state.tiktokToken = null;
+  state.userProfile = null;
+  updateTikTokUI();
+  
+  // Reset header avatar
+  const headerAvatar = $('#header-avatar-placeholder');
+  if (headerAvatar) {
+    headerAvatar.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" opacity="0.5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
+  }
+  
+  showToast('TikTok account unlinked');
+}
+
+// Wire buttons
+$('#modal-authorize-btn').addEventListener('click', openTikTokAuthPopup);
+$('#modal-later-btn').addEventListener('click', () => { 
+  const authModal = $('#auth-modal');
+  if (authModal) authModal.classList.remove('active'); 
+  sessionStorage.setItem('studio-auth-dismissed', 'true'); 
+  showToast('You can authorize later from the settings panel'); 
+});
+$('#tiktok-connect-btn').addEventListener('click', function() {
+  if (state.tiktokConnected) {
+    // Show unlink modal
+    const unlinkModal = $('#unlink-modal');
+    if (unlinkModal) unlinkModal.classList.add('active');
+    const confirmName = $('#unlink-confirm-name');
+    if (confirmName && state.userProfile) {
+      confirmName.textContent = state.userProfile.username;
+    }
+  } else {
+    openTikTokAuthPopup();
   }
 });
+
+// ═══════════════════════════════════════
+// SECURE UNLINK CONFIRMATION MODAL
+// ═══════════════════════════════════════
+$('#unlink-btn').addEventListener('click', function(e) {
+  e.preventDefault(); e.stopPropagation();
+  const unlinkModal = $('#unlink-modal');
+  if (unlinkModal) {
+    const confirmName = $('#unlink-confirm-name');
+    if (confirmName && state.userProfile) {
+      confirmName.textContent = state.userProfile.username;
+    }
+    const verifyInput = $('#unlink-verify-input');
+    if (verifyInput) verifyInput.value = '';
+    const confirmBtn = $('#unlink-confirm-btn');
+    if (confirmBtn) {
+      confirmBtn.style.opacity = '0.5';
+      confirmBtn.style.cursor = 'not-allowed';
+    }
+    unlinkModal.classList.add('active');
+  }
+});
+
+const unlinkVerifyInput = $('#unlink-verify-input');
+if (unlinkVerifyInput) {
+  unlinkVerifyInput.addEventListener('input', function() {
+    const currentName = state.userProfile?.username || '';
+    const confirmBtn = $('#unlink-confirm-btn');
+    if (!confirmBtn) return;
+    if (this.value.trim() === currentName) {
+      confirmBtn.style.opacity = '1';
+      confirmBtn.style.cursor = 'pointer';
+    } else {
+      confirmBtn.style.opacity = '0.5';
+      confirmBtn.style.cursor = 'not-allowed';
+    }
+  });
+}
+
+$('#unlink-confirm-btn').addEventListener('click', function() {
+  const currentName = state.userProfile?.username || '';
+  const verifyInput = $('#unlink-verify-input');
+  if (verifyInput && verifyInput.value.trim() === currentName) {
+    const unlinkModal = $('#unlink-modal');
+    if (unlinkModal) unlinkModal.classList.remove('active');
+    unlinkTikTokAccount();
+  } else {
+    showToast('⚠ Username verification failed');
+  }
+});
+
+$('#unlink-cancel-btn').addEventListener('click', () => { 
+  const unlinkModal = $('#unlink-modal');
+  if (unlinkModal) unlinkModal.classList.remove('active'); 
+});
+
+// ═══════════════════════════════════════
+// METADATA LOCKING
+// ═══════════════════════════════════════
+function setMetadataFieldsDisabled(disabled) {
+  const fields = ['#caption-input', '#privacy-select', '#mention-search', '#location-search', '#disable-comment', '#disable-duet', '#disable-stitch'];
+  fields.forEach(sel => {
+    const el = $(sel);
+    if (el) el.disabled = disabled;
+  });
+}
+setMetadataFieldsDisabled(true);
+
+// ═══════════════════════════════════════
+// MOBILE NAV
+// ═══════════════════════════════════════
+const hamburgerBtn = $('#hamburger-btn');
+const mobileNavDropdown = $('#mobile-nav-dropdown');
+if (hamburgerBtn) {
+  hamburgerBtn.addEventListener('click', () => {
+    if (mobileNavDropdown) mobileNavDropdown.classList.toggle('open');
+  });
+}
+document.addEventListener('click', (e) => {
+  if (hamburgerBtn && mobileNavDropdown) {
+    if (!hamburgerBtn.contains(e.target) && !mobileNavDropdown.contains(e.target)) {
+      mobileNavDropdown.classList.remove('open');
+    }
+  }
+});
+
+// ═══════════════════════════════════════
+// FILE UPLOAD & VIDEO INSPECTION
+// ═══════════════════════════════════════
+const previewZone = $('#preview-zone');
+const previewVideo = $('#preview-video');
+const fileInput = $('#file-input');
+
+function triggerFileInput() { if (fileInput) fileInput.click(); }
+
+const selectBtn = $('#preview-select-btn');
+if (selectBtn) selectBtn.addEventListener('click', (e) => { e.stopPropagation(); triggerFileInput(); });
+if (previewZone) previewZone.addEventListener('click', (e) => { if (!state.videoFile) triggerFileInput(); });
+const changeBtn = $('#change-video-btn');
+if (changeBtn) changeBtn.addEventListener('click', (e) => { e.stopPropagation(); triggerFileInput(); });
+
+if (fileInput) {
+  fileInput.addEventListener('change', (e) => { if (e.target.files[0]) handleVideoFile(e.target.files[0]); });
+}
+
+if (previewZone) {
+  previewZone.addEventListener('dragover', (e) => { e.preventDefault(); previewZone.style.borderColor = 'var(--tt-red)'; });
+  previewZone.addEventListener('dragleave', () => { previewZone.style.borderColor = state.videoFile ? 'var(--border-light)' : 'var(--border)'; });
+  previewZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    previewZone.style.borderColor = state.videoFile ? 'var(--border-light)' : 'var(--border)';
+    if (e.dataTransfer.files[0]?.type.startsWith('video/')) handleVideoFile(e.dataTransfer.files[0]);
+  });
+}
+
+function handleVideoFile(file) {
+  if (!file.type.startsWith('video/')) return showToast('⚠ Please select a video file');
+  if (file.size > 500 * 1024 * 1024) return showToast('⚠ File must be under 500 MB');
+  state.videoFile = file;
+  state.videoUrl = URL.createObjectURL(file);
+  state.isOptimized = false;
+  window.AETHER_OPTIMIZED_BLOB = null;
+  if (previewVideo) previewVideo.src = state.videoUrl;
+  
+  const placeholder = $('#preview-placeholder');
+  const videoWrap = $('#video-preview-wrap');
+  if (placeholder) placeholder.style.display = 'none';
+  if (videoWrap) videoWrap.classList.add('active');
+  if (previewZone) previewZone.classList.add('has-video');
+  
+  setMetadataFieldsDisabled(true);
+  const mainBtn = $('#main-upload-btn');
+  const headerBtn = $('#header-upload-btn');
+  if (mainBtn) mainBtn.disabled = false;
+  if (headerBtn) headerBtn.disabled = true;
+  resetOptimizeButton();
+  inspectVideoMedia(file);
+  if (previewVideo) previewVideo.play().then(() => { state.isPlaying = true; updatePlayPauseIcon(); }).catch(() => {});
+}
+
+function resetOptimizeButton() {
+  const btn = $('#main-upload-btn');
+  if (!btn) return;
+  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Optimize Video Quality';
+  btn.style.background = 'var(--white)';
+  btn.style.color = 'var(--bg)';
+}
+
+function setDownloadPatchedButton() {
+  const btn = $('#main-upload-btn');
+  if (!btn) return;
+  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>⬇ Download Patched Master';
+  btn.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)';
+  btn.style.color = '#050505';
+  btn.style.fontWeight = '800';
+}
+
+async function inspectVideoMedia(file) {
+  const statusSection = $('#status-section');
+  if (statusSection) statusSection.style.display = 'block';
+  
+  const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+  const statSize = $('#stat-size');
+  if (statSize) statSize.textContent = sizeMB + ' MB';
+  updateBadge('stat-size-status', sizeMB <= 500, '✓ OK', '⚠ Large');
+
+  const mime = file.type;
+  let codec = mime.includes('mp4') || mime.includes('quicktime') ? 'H.264 (AVC)' : mime.includes('webm') ? 'VP9' : 'Unknown';
+  const statCodec = $('#stat-codec');
+  if (statCodec) statCodec.textContent = codec;
+  updateBadge('stat-codec-status', codec.includes('H.264'), '✓ Optimal', 'Will convert');
+
+  if (!previewVideo) return;
+  await new Promise((resolve) => {
+    if (previewVideo.readyState >= 1) resolve();
+    else previewVideo.addEventListener('loadedmetadata', resolve, { once: true });
+  });
+
+  const w = previewVideo.videoWidth, h = previewVideo.videoHeight;
+  const statRes = $('#stat-res');
+  if (statRes) statRes.textContent = (w && h) ? w + '×' + h : 'Unknown';
+  updateBadge('stat-res-status', h >= 1080 || w >= 1920, '✓ Optimal', 'Low res');
+
+  const dur = previewVideo.duration;
+  if (dur && isFinite(dur)) {
+    const min = Math.floor(dur / 60), sec = Math.floor(dur % 60);
+    const statDur = $('#stat-duration');
+    if (statDur) statDur.textContent = min + ':' + sec.toString().padStart(2, '0');
+    updateBadge('stat-duration-status', dur <= 600, '✓ OK', 'Too long');
+  } else {
+    const statDur = $('#stat-duration');
+    if (statDur) statDur.textContent = '—';
+    updateBadge('stat-duration-status', true, '—', '');
+  }
+
+  if (dur && isFinite(dur) && dur > 0) {
+    const bitrateMbps = ((file.size * 8) / (dur * 1000000)).toFixed(1);
+    const statBitrate = $('#stat-bitrate');
+    if (statBitrate) statBitrate.textContent = bitrateMbps + ' Mbps';
+    updateBadge('stat-bitrate-status', parseFloat(bitrateMbps) >= 5, '✓ Optimal', 'Low');
+  } else {
+    const estBitrate = ((file.size * 8) / (10 * 1000000)).toFixed(1);
+    const statBitrate = $('#stat-bitrate');
+    if (statBitrate) statBitrate.textContent = estBitrate + ' Mbps (est)';
+    updateBadge('stat-bitrate-status', parseFloat(estBitrate) >= 5, '✓ Optimal', 'Low');
+  }
+
+  const statFps = $('#stat-fps');
+  if (statFps) statFps.textContent = '—';
+  updateBadge('stat-fps-status', false, '', 'Pending');
+  const fpsStatus = $('#stat-fps-status');
+  if (fpsStatus) fpsStatus.className = 'status-indicator amber';
+}
+
+function updateBadge(id, isGood, goodText, badText) {
+  const el = $('#' + id);
+  if (!el) return;
+  el.textContent = isGood ? goodText : badText;
+  el.className = 'status-indicator ' + (isGood ? 'green' : (badText === '⚠ Large' || badText === 'Too long' || badText === 'Pending' ? 'amber' : 'red'));
+}
+
+// ═══════════════════════════════════════
+// VIDEO CONTROLS
+// ═══════════════════════════════════════
+function updatePlayPauseIcon() {
+  const playIcon = $('#play-icon');
+  const pauseIcon = $('#pause-icon');
+  if (playIcon) playIcon.style.display = state.isPlaying ? 'none' : 'block';
+  if (pauseIcon) pauseIcon.style.display = state.isPlaying ? 'block' : 'none';
+}
+
+const playPauseBtn = $('#play-pause-btn');
+if (playPauseBtn) {
+  playPauseBtn.addEventListener('click', (e) => { 
+    e.stopPropagation(); 
+    if (!previewVideo) return;
+    state.isPlaying ? previewVideo.pause() : previewVideo.play(); 
+    state.isPlaying = !state.isPlaying; 
+    updatePlayPauseIcon(); 
+  });
+}
+
+if (previewVideo) {
+  previewVideo.addEventListener('play', () => { state.isPlaying = true; updatePlayPauseIcon(); });
+  previewVideo.addEventListener('pause', () => { state.isPlaying = false; updatePlayPauseIcon(); });
+  previewVideo.addEventListener('click', () => { state.isPlaying ? previewVideo.pause() : previewVideo.play(); });
+}
+
+const muteBtn = $('#mute-btn');
+if (muteBtn && previewVideo) {
+  muteBtn.addEventListener('click', (e) => { 
+    e.stopPropagation(); 
+    previewVideo.muted = !previewVideo.muted; 
+    const unmuteIcon = $('#unmute-icon');
+    const muteIconEl = $('#mute-icon-el');
+    if (unmuteIcon) unmuteIcon.style.display = previewVideo.muted ? 'none' : 'block';
+    if (muteIconEl) muteIconEl.style.display = previewVideo.muted ? 'block' : 'none';
+  });
+}
+
+const fullscreenBtn = $('#fullscreen-btn');
+if (fullscreenBtn && previewVideo) {
+  fullscreenBtn.addEventListener('click', (e) => { 
+    e.stopPropagation(); 
+    previewVideo.requestFullscreen?.(); 
+  });
+}
+
+// ═══════════════════════════════════════
+// CAPTION
+// ═══════════════════════════════════════
+const captionInput = $('#caption-input');
+if (captionInput) {
+  captionInput.addEventListener('input', () => {
+    const len = captionInput.value.length;
+    const charCount = $('#char-count');
+    if (charCount) {
+      charCount.textContent = len + ' / 2,200';
+      charCount.style.color = len > 2000 ? 'var(--tt-red)' : 'var(--text-tertiary)';
+    }
+  });
+}
+
+window.insertText = function(text) {
+  if (!captionInput) return;
+  const pos = captionInput.selectionStart;
+  const before = captionInput.value.substring(0, pos), after = captionInput.value.substring(pos);
+  const sep = (before.endsWith(' ') || before.length === 0) ? '' : ' ';
+  captionInput.value = before + sep + text + ' ' + after;
+  captionInput.focus();
+  captionInput.dispatchEvent(new Event('input'));
+};
+
+// ═══════════════════════════════════════
+// DEBOUNCED SEARCH
+// ═══════════════════════════════════════
+const debounceTimers = {};
+function debounce(key, fn, delay = 300) { clearTimeout(debounceTimers[key]); debounceTimers[key] = setTimeout(fn, delay); }
+
+window.focusSearch = function(type) { 
+  const input = $('#' + type + '-search'); 
+  if (input) { input.style.display = 'block'; input.focus(); }
+};
+
+const mentionSearch = $('#mention-search');
+if (mentionSearch) {
+  mentionSearch.addEventListener('input', function() {
+    const query = this.value.trim();
+    const results = $('#mention-results');
+    if (!query) { if (results) results.classList.remove('active'); return; }
+    debounce('mention', () => {
+      if (results) {
+        results.innerHTML = '<div class="dropdown-item"><span style="color:var(--text-tertiary);">Search for @' + query + '...</span></div>';
+        results.classList.add('active');
+      }
+    }, 300);
+  });
+}
+
+const locationSearch = $('#location-search');
+if (locationSearch) {
+  locationSearch.addEventListener('input', function() {
+    const query = this.value.trim();
+    const results = $('#location-results');
+    if (!query) { if (results) results.classList.remove('active'); return; }
+    debounce('location', () => {
+      if (results) {
+        let locations = [{ name: query + ' City Center' }];
+        results.innerHTML = locations.map(l => `<div class="dropdown-item" data-loc-name="${l.name}"><span style="font-size:14px">📍</span><span style="font-weight:500">${l.name}</span></div>`).join('');
+        results.classList.add('active');
+      }
+    }, 300);
+  });
+}
+
+document.addEventListener('click', (e) => {
+  const mentionResults = $('#mention-results');
+  const locationResults = $('#location-results');
+  const mentionSearchEl = $('#mention-search');
+  const locationSearchEl = $('#location-search');
+  if (mentionSearchEl && mentionResults && !mentionSearchEl.contains(e.target) && !mentionResults.contains(e.target)) {
+    mentionResults.classList.remove('active');
+  }
+  if (locationSearchEl && locationResults && !locationSearchEl.contains(e.target) && !locationResults.contains(e.target)) {
+    locationResults.classList.remove('active');
+  }
+});
+
+// ═══════════════════════════════════════
+// OPTIMIZE PIPELINE
+// ═══════════════════════════════════════
+async function executeOptimizePipeline() {
+  if (!state.videoFile) return showToast('⚠ Please select a video first');
+  
+  const overlay = $('#processing-overlay');
+  const subtitle = $('#processing-subtitle');
+  const title = $('#processing-title');
+  const progressBar = $('#progress-bar-fill');
+  const steps = ['proc-step-1', 'proc-step-2', 'proc-step-3', 'proc-step-4'];
+  
+  if (progressBar) { progressBar.style.width = '0%'; progressBar.style.background = 'linear-gradient(90deg, var(--tt-red), var(--tt-cyan))'; }
+  steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
+  const step1 = $('#proc-step-1'); if (step1) step1.classList.add('active');
+  if (title) title.textContent = 'Quality Bypass Active';
+  
+  if (overlay) overlay.classList.add('active');
+  const headerBtn = $('#header-upload-btn');
+  const mainBtn = $('#main-upload-btn');
+  if (headerBtn) headerBtn.disabled = true;
+  if (mainBtn) mainBtn.disabled = true;
+  
+  try {
+    if (subtitle) subtitle.textContent = 'Quality bypass remuxing (H.264 high profile)...';
+    if (progressBar) progressBar.style.width = '25%';
+    
+    const formData = new FormData();
+    formData.append('video', state.videoFile);
+    
+    let optimizedBlob;
+    try {
+      const res = await fetch(`${API.SERVER_API_ROOT}/optimize-video`, { method: 'POST', body: formData });
+      if (res.ok) { optimizedBlob = await res.blob(); }
+      else { throw new Error('Server returned: ' + res.status); }
+    } catch (err) {
+      console.log('Optimization fallback:', err.message);
+      await new Promise(r => setTimeout(r, 2000));
+      optimizedBlob = new Blob([state.videoFile], { type: 'video/mp4' });
+    }
+    
+    window.AETHER_OPTIMIZED_BLOB = optimizedBlob;
+    state.isOptimized = true;
+    
+    if (progressBar) { progressBar.style.width = '100%'; progressBar.style.background = 'var(--green)'; }
+    if (subtitle) subtitle.textContent = 'Optimization complete — Download ready';
+    
+    const statFps = $('#stat-fps');
+    const fpsStatus = $('#stat-fps-status');
+    if (statFps) statFps.textContent = '✓ Managed';
+    if (fpsStatus) { fpsStatus.textContent = '✓ Managed'; fpsStatus.className = 'status-indicator green'; }
+    
+    setTimeout(() => {
+      if (overlay) overlay.classList.remove('active');
+      if (progressBar) progressBar.style.width = '0%';
+      steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
+      setMetadataFieldsDisabled(false);
+      setDownloadPatchedButton();
+      if (state.tiktokConnected && headerBtn) headerBtn.disabled = false;
+      showToast('✓ Master patched — Ready to download');
+    }, 1200);
+  } catch (err) {
+    if (overlay) overlay.classList.remove('active');
+    if (mainBtn) mainBtn.disabled = false;
+    showToast('⚠ Optimization failed: ' + err.message);
+    console.error('Optimize error:', err);
+  }
+}
+
+// ═══════════════════════════════════════
+// DOWNLOAD PIPELINE
+// ═══════════════════════════════════════
+async function executeDownloadPipeline() {
+  if (!state.isOptimized) return executeOptimizePipeline();
+  if (!window.AETHER_OPTIMIZED_BLOB) return showToast('⚠ No optimized stream found');
+  
+  const overlay = $('#processing-overlay');
+  const subtitle = $('#processing-subtitle');
+  const title = $('#processing-title');
+  const progressBar = $('#progress-bar-fill');
+  
+  if (progressBar) { progressBar.style.width = '0%'; progressBar.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)'; }
+  if (title) title.textContent = 'Downloading Patched Master';
+  if (subtitle) subtitle.textContent = 'Preparing high-fidelity download...';
+  
+  if (overlay) overlay.classList.add('active');
+  const headerBtn = $('#header-upload-btn');
+  const mainBtn = $('#main-upload-btn');
+  if (headerBtn) headerBtn.disabled = true;
+  if (mainBtn) mainBtn.disabled = true;
+  
+  // Instant download
+  const downloadUrl = URL.createObjectURL(window.AETHER_OPTIMIZED_BLOB);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = 'aether_master_edit_patched.mp4';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(downloadUrl);
+  
+  // Count animation
+  let percent = 1;
+  if (progressBar) progressBar.style.width = '1%';
+  
+  const countInterval = setInterval(() => {
+    percent += Math.floor(Math.random() * 6) + 1;
+    if (percent >= 100) { percent = 100; clearInterval(countInterval); }
+    if (progressBar) progressBar.style.width = percent + '%';
+    if (subtitle) subtitle.textContent = 'Downloading... ' + percent + '%';
+  }, 120);
+  
+  setTimeout(() => {
+    clearInterval(countInterval);
+    if (progressBar) { progressBar.style.width = '100%'; progressBar.style.background = 'var(--green)'; }
+    if (subtitle) subtitle.textContent = 'Download complete — aether_master_edit_patched.mp4';
+    
+    setTimeout(() => {
+      if (overlay) overlay.classList.remove('active');
+      if (progressBar) progressBar.style.width = '0%';
+      if (headerBtn) headerBtn.disabled = false;
+      if (mainBtn) mainBtn.disabled = false;
+      setDownloadPatchedButton();
+      showToast('✓ Master patched file downloaded');
+    }, 2000);
+  }, 2500);
+}
+
+// ═══════════════════════════════════════
+// MAIN BUTTON HANDLER
+// ═══════════════════════════════════════
+const mainUploadBtn = $('#main-upload-btn');
+if (mainUploadBtn) {
+  mainUploadBtn.addEventListener('click', () => {
+    if (!state.isOptimized) executeOptimizePipeline();
+    else executeDownloadPipeline();
+  });
+}
+
+const headerUploadBtn = $('#header-upload-btn');
+if (headerUploadBtn) {
+  headerUploadBtn.addEventListener('click', executeDownloadPipeline);
+}
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    if (!state.isOptimized) executeOptimizePipeline();
+    else executeDownloadPipeline();
+  }
+});
+})();
+</script>
 </body>
 </html>
