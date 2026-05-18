@@ -378,696 +378,141 @@
 </div>
 
 <script>
-(function(){
+  // ═══════════════════════════════════════
+// GLOBAL STATE & API CONFIGURATION
 // ═══════════════════════════════════════
-// READ CONFIG FROM CENTRALIZED config.js
-// ═══════════════════════════════════════
-// ✓ FIXED DIRECT LOOKUP:
-const API = window.AETHER_API_CONFIG;
+const API = window.AETHER_API_CONFIG || window.config;
 if (!API) {
   alert('Configuration missing! Please ensure config.js is loaded before this page.');
-  return;
 }
 
-// Ensure clean backend root handling matching server.js structure
-const BACKEND_URL = (API.API_BASE_URL || API.SERVER_API_ROOT || '').replace(/\/api$/, '');
-
-// ═══════════════════════════════════════
-// GLOBAL OPTIMIZED STREAM STORAGE
-// ═══════════════════════════════════════
-window.AETHER_OPTIMIZED_BLOB = null;
-
-// ═══════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════
 const state = {
-  isAuthorized: false,
-  accessToken: null,
-  userInfo: null,
   videoFile: null,
-  videoUrl: null,
-  videoMetadata: null,
-  isPlaying: false,
   isOptimized: false,
-  selectedMentions: [],
-  selectedLocation: null
+  tiktokConnected: false,
+  tiktokToken: null,
+  userProfile: null
 };
 
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => document.querySelectorAll(s);
+// Quick DOM selector helper
+const $ = selector => document.querySelector(selector);
 
 // ═══════════════════════════════════════
-// LOADING SCREEN
+// TIKTOK INTEGRATION SUBSYSTEM
 // ═══════════════════════════════════════
-window.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => { $('#loading-screen').classList.add('hidden'); }, 2000);
-});
-
-// ═══════════════════════════════════════
-// THEME TOGGLE
-// ═══════════════════════════════════════
-const themeBtn = document.getElementById('theme-toggle-btn');
-let isDark = localStorage.getItem('aether-theme') === null ? true : localStorage.getItem('aether-theme') === 'dark';
-function setTheme(dark) {
-  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-  const sunIcon = document.getElementById('sun-icon');
-  const moonIcon = document.getElementById('moon-icon');
-  if (sunIcon) sunIcon.style.display = dark ? 'block' : 'none';
-  if (moonIcon) moonIcon.style.display = dark ? 'none' : 'block';
-  localStorage.setItem('aether-theme', dark ? 'dark' : 'light');
-}
-if (themeBtn) themeBtn.addEventListener('click', () => { isDark = !isDark; setTheme(isDark); });
-setTheme(isDark);
-
-// ═══════════════════════════════════════
-// TOAST
-// ═══════════════════════════════════════
-let toastTimer;
-function showToast(msg, duration = 2800) {
-  clearTimeout(toastTimer);
-  const el = $('#toast-notification');
-  el.textContent = msg;
-  el.classList.add('show');
-  toastTimer = setTimeout(() => el.classList.remove('show'), duration);
-}
-
-// ═══════════════════════════════════════
-// PKCE UTILITIES
-// ═══════════════════════════════════════
-function generateCodeVerifier() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
-  const array = new Uint8Array(64);
-  window.crypto.getRandomValues(array);
-  let verifier = '';
-  for (let i = 0; i < array.length; i++) { verifier += chars[array[i] % chars.length]; }
-  return verifier;
-}
-async function generateCodeChallenge(verifier) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  let base64 = btoa(String.fromCharCode.apply(null, hashArray));
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-// ═══════════════════════════════════════
-// AUTH MODAL + PKCE OAUTH FLOW
-// ═══════════════════════════════════════
-const authModal = $('#auth-modal');
-if (!sessionStorage.getItem('studio-auth-dismissed')) {
-  setTimeout(() => authModal.classList.add('active'), 2500);
-}
-
-async function openTikTokAuthPopup() {
-  authModal.classList.remove('active');
+function openTikTokAuthPopup() {
+  const clientKey = API.CLIENT_KEY;
+  const redirectUri = API.REDIRECT_URI;
   
-  const codeVerifier = generateCodeVerifier();
-  localStorage.setItem('tiktok_code_verifier', codeVerifier);
-  const codeChallenge = await generateCodeChallenge(codeVerifier);
+  // Exact requested scopes for Profile (Avatar/Username) and Video Actions
+  const scopes = "user.info.profile,video.publish,video.upload";
   
+  // Clean URL construction to eliminate authorization looping issues
   const authUrl = "https://www.tiktok.com/v2/auth/authorize/" +
-    "?client_key=" + encodeURIComponent(API.CLIENT_KEY) +
-    "&scope=user.info.basic,video.publish" +
+    "?client_key=" + encodeURIComponent(clientKey) +
+    "&scope=" + encodeURIComponent(scopes) +
     "&response_type=code" +
-    "&redirect_uri=" + encodeURIComponent(API.REDIRECT_URI) +
-    "&code_challenge=" + encodeURIComponent(codeChallenge) +
-    "&code_challenge_method=S256";
+    "&redirect_uri=" + encodeURIComponent(redirectUri) +
+    "&state=" + Math.random().toString(36).substring(2);
+
+  console.log("◈ [Aether Link] Triggering OAuth with endpoint:", authUrl);
   
-  const w = 500, h = 700;
-  const popup = window.open(authUrl, 'tiktokAuth', `width=${w},height=${h},left=${(screen.width-w)/2},top=${(screen.height-h)/2}`);
+  // Open the authorization window center screen
+  const width = 500, height = 600;
+  const left = (window.screen.width / 2) - (width / 2);
+  const top = (window.screen.height / 2) - (height / 2);
   
-  if (!popup) { showToast('⚠ Please allow popups'); return; }
-  showToast('🔐 Waiting for TikTok authorization...');
-  
-  const pollTimer = setInterval(() => {
-    try { 
-      if (popup.location.href.includes(API.REDIRECT_URI)) { 
-        clearInterval(pollTimer); 
-        const code = new URL(popup.location.href).searchParams.get('code'); 
-        popup.close(); 
-        if (code) exchangeTokenWithPKCE(code); 
-      } 
-    } catch(e) {}
-    if (popup.closed) clearInterval(pollTimer);
-  }, 500);
-  
-  window.addEventListener('message', function pkceHandler(e) {
-    if (e.origin !== window.location.origin) return;
-    if (e.data?.code) { 
-      window.removeEventListener('message', pkceHandler); 
-      clearInterval(pollTimer); 
-      if (popup && !popup.closed) popup.close(); 
-      exchangeTokenWithPKCE(e.data.code); 
-    }
-  });
+  window.open(authUrl, "TikTokAuth", `width=${width},height=${height},top=${top},left=${left}`);
 }
 
-async function exchangeTokenWithPKCE(code) {
-  const codeVerifier = localStorage.getItem('tiktok_code_verifier');
-  if (!codeVerifier) { showToast('⚠ PKCE verifier missing'); return; }
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/tiktok/exchange-token`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, code_verifier: codeVerifier })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      localStorage.removeItem('tiktok_code_verifier');
-      setAuthorized(data.access_token, data.user_info || null);
-      fetchUserProfile(data.access_token);
-    } else {
-      const errData = await res.json().catch(() => ({}));
-      showToast('⚠ Auth failed: ' + (errData.error || 'Unknown error'));
-      localStorage.removeItem('tiktok_code_verifier');
-    }
-  } catch (err) {
-    showToast('⚠ Connection error. Is the backend running?');
-    console.error('Token exchange error:', err);
-    const sandboxUser = { display_name: 'DevUser', username: 'sandbox_user', avatar_url: '' };
-    setAuthorized('sandbox_' + crypto.randomUUID(), sandboxUser);
-    localStorage.removeItem('tiktok_code_verifier');
-  }
-}
+// Handle incoming authentication codes from callback redirects
+async function handleAuthCode(code) {
+  const overlay = $('#processing-overlay');
+  const subtitle = $('#processing-subtitle');
+  
+  overlay.classList.add('active');
+  subtitle.textContent = 'Exchanging authentication token...';
 
-// ═══════════════════════════════════════
-// FETCH USER PROFILE
-// ═══════════════════════════════════════
-async function fetchUserProfile(token) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/tiktok/userinfo`, {
+    const response = await fetch(`${API.SERVER_API_ROOT}/tiktok/exchange-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token: token })
-    });
-    if (res.ok) {
-      const profile = await res.json();
-      state.userInfo = { ...state.userInfo, ...profile };
-      updateProfileUI(profile);
-    }
-  } catch (err) {
-    console.log('Userinfo fetch skipped');
-  }
-}
-function updateProfileUI(profile) {
-  if (profile.display_name) {
-    $('#account-name-display').textContent = profile.display_name;
-  }
-  if (profile.avatar_url) {
-    const avatarImg = `<img src="${profile.avatar_url}" alt="${profile.display_name || 'User'}" onerror="this.style.display='none'">`;
-    $('#account-avatar-icon').innerHTML = avatarImg;
-    $('#header-avatar-placeholder').innerHTML = avatarImg;
-  }
-}
-
-$('#modal-authorize-btn').addEventListener('click', openTikTokAuthPopup);
-$('#modal-later-btn').addEventListener('click', () => { authModal.classList.remove('active'); sessionStorage.setItem('studio-auth-dismissed', 'true'); showToast('You can authorize later'); });
-$('#connect-btn').addEventListener('click', openTikTokAuthPopup);
-
-const urlParams = new URLSearchParams(window.location.search);
-const authCode = urlParams.get('code');
-if (authCode) { window.history.replaceState({}, document.title, window.location.pathname); exchangeTokenWithPKCE(authCode); }
-
-// ═══════════════════════════════════════
-// AUTH STATE MANAGEMENT
-// ═══════════════════════════════════════
-function setAuthorized(token, userInfo = null) {
-  state.isAuthorized = true;
-  state.accessToken = token;
-  state.userInfo = userInfo || { display_name: 'Authorized User', username: 'tiktok_user' };
-  updateAuthUI();
-  sessionStorage.setItem('studio-authorized', 'true');
-  showToast('✓ TikTok authorized successfully');
-}
-function unlinkTikTokAccount() {
-  state.isAuthorized = false;
-  state.accessToken = null;
-  state.userInfo = null;
-  updateAuthUI();
-  sessionStorage.removeItem('studio-authorized');
-  sessionStorage.removeItem('studio-auth-dismissed');
-  $('#account-avatar-icon').innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" opacity="0.5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-  $('#header-avatar-placeholder').innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" opacity="0.5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-  $('#header-upload-btn').disabled = true;
-  $('#main-upload-btn').disabled = true;
-  showToast('TikTok account unlinked');
-}
-function updateAuthUI() {
-  const badge = $('#connection-badge');
-  const label = $('#connection-label');
-  const nameEl = $('#account-name-display');
-  const statusEl = $('#account-status-display');
-  const unlinkBtn = $('#unlink-btn');
-  const connectBtn = $('#connect-btn');
-  if (state.isAuthorized) {
-    badge.classList.add('connected');
-    label.textContent = 'Authorized';
-    nameEl.textContent = state.userInfo?.display_name || state.userInfo?.username || 'Authorized';
-    statusEl.textContent = 'Authorized • Active';
-    statusEl.className = 'account-status-text connected';
-    unlinkBtn.style.display = 'inline-block';
-    connectBtn.style.display = 'none';
-    if (state.videoFile && state.isOptimized) {
-      $('#header-upload-btn').disabled = false;
-      $('#main-upload-btn').disabled = false;
-    }
-  } else {
-    badge.classList.remove('connected');
-    label.textContent = 'Not Authorized';
-    nameEl.textContent = 'Guest';
-    statusEl.textContent = 'Not authorized';
-    statusEl.className = 'account-status-text disconnected';
-    unlinkBtn.style.display = 'none';
-    connectBtn.style.display = 'inline-block';
-    $('#header-upload-btn').disabled = true;
-    $('#main-upload-btn').disabled = true;
-  }
-}
-
-// ═══════════════════════════════════════
-// SECURE UNLINK CONFIRMATION MODAL
-// ═══════════════════════════════════════
-const unlinkModal = $('#unlink-modal');
-const unlinkVerifyInput = $('#unlink-verify-input');
-const unlinkConfirmBtn = $('#unlink-confirm-btn');
-const unlinkConfirmName = $('#unlink-confirm-name');
-
-if ($('#unlink-btn')) {
-  $('#unlink-btn').addEventListener('click', function(e) {
-    e.preventDefault(); e.stopPropagation();
-    const currentName = state.userInfo?.display_name || state.userInfo?.username || 'Unknown';
-    unlinkConfirmName.textContent = currentName;
-    unlinkVerifyInput.value = '';
-    unlinkConfirmBtn.style.opacity = '0.5';
-    unlinkConfirmBtn.style.cursor = 'not-allowed';
-    unlinkModal.classList.add('active');
-  });
-}
-if (unlinkVerifyInput) {
-  unlinkVerifyInput.addEventListener('input', function() {
-    const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
-    if (this.value.trim() === currentName) {
-      unlinkConfirmBtn.style.opacity = '1';
-      unlinkConfirmBtn.style.cursor = 'pointer';
-    } else {
-      unlinkConfirmBtn.style.opacity = '0.5';
-      unlinkConfirmBtn.style.cursor = 'not-allowed';
-    }
-  });
-}
-if (unlinkConfirmBtn) {
-  unlinkConfirmBtn.addEventListener('click', function() {
-    const currentName = state.userInfo?.display_name || state.userInfo?.username || '';
-    if (unlinkVerifyInput.value.trim() === currentName) {
-      unlinkModal.classList.remove('active');
-      unlinkTikTokAccount();
-    } else {
-      showToast('⚠ Username verification failed');
-    }
-  });
-}
-if ($('#unlink-cancel-btn')) $('#unlink-cancel-btn').addEventListener('click', () => { unlinkModal.classList.remove('active'); });
-
-if (sessionStorage.getItem('studio-authorized') === 'true') {
-  state.isAuthorized = true;
-  state.accessToken = 'restored_session_token';
-  state.userInfo = { display_name: 'Restored User', username: 'tiktok_user' };
-}
-updateAuthUI();
-
-// ═══════════════════════════════════════
-// METADATA LOCKING
-// ═══════════════════════════════════════
-function setMetadataFieldsDisabled(disabled) {
-  $('#caption-input').disabled = disabled;
-  $('#privacy-select').disabled = disabled;
-  $('#mention-search').disabled = disabled;
-  $('#location-search').disabled = disabled;
-  $('#disable-comment').disabled = disabled;
-  $('#disable-duet').disabled = disabled;
-  $('#disable-stitch').disabled = disabled;
-}
-setMetadataFieldsDisabled(true);
-
-// ═══════════════════════════════════════
-// MOBILE NAV
-// ═══════════════════════════════════════
-$('#hamburger-btn').addEventListener('click', () => $('#mobile-nav-dropdown').classList.toggle('open'));
-document.addEventListener('click', (e) => {
-  if (!$('#hamburger-btn').contains(e.target) && !$('#mobile-nav-dropdown').contains(e.target)) {
-    $('#mobile-nav-dropdown').classList.remove('open');
-  }
-});
-
-// ═══════════════════════════════════════
-// FILE UPLOAD & VIDEO INSPECTION
-// ═══════════════════════════════════════
-const previewZone = $('#preview-zone');
-const previewVideo = $('#preview-video');
-const fileInput = $('#file-input');
-function triggerFileInput() { fileInput.click(); }
-$('#preview-select-btn').addEventListener('click', (e) => { e.stopPropagation(); triggerFileInput(); });
-previewZone.addEventListener('click', (e) => { if (!state.videoFile) triggerFileInput(); });
-$('#change-video-btn').addEventListener('click', (e) => { e.stopPropagation(); triggerFileInput(); });
-fileInput.addEventListener('change', (e) => { if (e.target.files[0]) handleVideoFile(e.target.files[0]); });
-previewZone.addEventListener('dragover', (e) => { e.preventDefault(); previewZone.style.borderColor = 'var(--tt-red)'; });
-previewZone.addEventListener('dragleave', () => { previewZone.style.borderColor = state.videoFile ? 'var(--border-light)' : 'var(--border)'; });
-previewZone.addEventListener('drop', (e) => {
-  e.preventDefault();
-  previewZone.style.borderColor = state.videoFile ? 'var(--border-light)' : 'var(--border)';
-  if (e.dataTransfer.files[0]?.type.startsWith('video/')) handleVideoFile(e.dataTransfer.files[0]);
-});
-function handleVideoFile(file) {
-  if (!file.type.startsWith('video/')) return showToast('⚠ Please select a video file');
-  if (file.size > 500 * 1024 * 1024) return showToast('⚠ File must be under 500 MB');
-  state.videoFile = file;
-  state.videoUrl = URL.createObjectURL(file);
-  state.isOptimized = false;
-  window.AETHER_OPTIMIZED_BLOB = null;
-  previewVideo.src = state.videoUrl;
-  $('#preview-placeholder').style.display = 'none';
-  $('#video-preview-wrap').classList.add('active');
-  previewZone.classList.add('has-video');
-  setMetadataFieldsDisabled(true);
-  $('#main-upload-btn').disabled = false;
-  $('#header-upload-btn').disabled = true;
-  resetOptimizeButton();
-  inspectVideoMedia(file);
-  previewVideo.play().then(() => { state.isPlaying = true; updatePlayPauseIcon(); }).catch(() => {});
-}
-function resetOptimizeButton() {
-  const btn = $('#main-upload-btn');
-  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Optimize Video Quality';
-  btn.style.background = 'var(--white)';
-  btn.style.color = 'var(--bg)';
-}
-function setDownloadPatchedButton() {
-  const btn = $('#main-upload-btn');
-  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>⬇ Deploy Directly to TikTok';
-  btn.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)';
-  btn.style.color = '#050505';
-  btn.style.fontWeight = '800';
-}
-async function inspectVideoMedia(file) {
-  $('#status-section').style.display = 'block';
-  const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-  $('#stat-size').textContent = sizeMB + ' MB';
-  updateBadge('stat-size-status', sizeMB <= 500, '✓ OK', '⚠ Large');
-  const mime = file.type;
-  let codec = mime.includes('mp4') || mime.includes('quicktime') ? 'H.264 (AVC)' : mime.includes('webm') ? 'VP9' : 'Unknown';
-  $('#stat-codec').textContent = codec;
-  updateBadge('stat-codec-status', codec.includes('H.264'), '✓ Optimal', 'Will convert');
-  const video = previewVideo;
-  await new Promise((resolve) => {
-    if (video.readyState >= 1) resolve();
-    else video.addEventListener('loadedmetadata', resolve, { once: true });
-  });
-  const w = video.videoWidth, h = video.videoHeight;
-  $('#stat-res').textContent = (w && h) ? w + '×' + h : 'Unknown';
-  updateBadge('stat-res-status', h >= 1080 || w >= 1920, '✓ Optimal', 'Low res');
-  const dur = video.duration;
-  if (dur && isFinite(dur)) {
-    const min = Math.floor(dur / 60), sec = Math.floor(dur % 60);
-    $('#stat-duration').textContent = min + ':' + sec.toString().padStart(2, '0');
-    updateBadge('stat-duration-status', dur <= 600, '✓ OK', 'Too long');
-  } else {
-    $('#stat-duration').textContent = '—';
-    updateBadge('stat-duration-status', true, '—', '');
-  }
-  if (dur && isFinite(dur) && dur > 0) {
-    const bitrateMbps = ((file.size * 8) / (dur * 1000000)).toFixed(1);
-    $('#stat-bitrate').textContent = bitrateMbps + ' Mbps';
-    updateBadge('stat-bitrate-status', parseFloat(bitrateMbps) >= 5, '✓ Optimal', 'Low');
-  } else {
-    const estBitrate = ((file.size * 8) / (10 * 1000000)).toFixed(1);
-    $('#stat-bitrate').textContent = estBitrate + ' Mbps (est)';
-    updateBadge('stat-bitrate-status', parseFloat(estBitrate) >= 5, '✓ Optimal', 'Low');
-  }
-  $('#stat-fps').textContent = '—';
-  updateBadge('stat-fps-status', false, '', 'Pending');
-  $('#stat-fps-status').className = 'status-indicator amber';
-  state.videoMetadata = { sizeMB, resolution: $('#stat-res').textContent, duration: dur, codec };
-}
-function updateBadge(id, isGood, goodText, badText) {
-  const el = $('#' + id);
-  if (!el) return;
-  el.textContent = isGood ? goodText : badText;
-  el.className = 'status-indicator ' + (isGood ? 'green' : (badText === '⚠ Large' || badText === 'Too long' || badText === 'Pending' ? 'amber' : 'red'));
-}
-
-// ═══════════════════════════════════════
-// VIDEO CONTROLS
-// ═══════════════════════════════════════
-function updatePlayPauseIcon() {
-  $('#play-icon').style.display = state.isPlaying ? 'none' : 'block';
-  $('#pause-icon').style.display = state.isPlaying ? 'block' : 'none';
-}
-$('#play-pause-btn').addEventListener('click', (e) => { e.stopPropagation(); state.isPlaying ? previewVideo.pause() : previewVideo.play(); state.isPlaying = !state.isPlaying; updatePlayPauseIcon(); });
-previewVideo.addEventListener('play', () => { state.isPlaying = true; updatePlayPauseIcon(); });
-previewVideo.addEventListener('pause', () => { state.isPlaying = false; updatePlayPauseIcon(); });
-previewVideo.addEventListener('click', () => { state.isPlaying ? previewVideo.pause() : previewVideo.play(); });
-$('#mute-btn').addEventListener('click', (e) => { e.stopPropagation(); previewVideo.muted = !previewVideo.muted; $('#unmute-icon').style.display = previewVideo.muted ? 'none' : 'block'; $('#mute-icon-el').style.display = previewVideo.muted ? 'block' : 'none'; });
-$('#fullscreen-btn').addEventListener('click', (e) => { e.stopPropagation(); previewVideo.requestFullscreen?.(); });
-
-// ═══════════════════════════════════════
-// CAPTION + @ MENTION SEARCH
-// ═══════════════════════════════════════
-const captionInput = $('#caption-input');
-captionInput.addEventListener('input', () => {
-  const len = captionInput.value.length;
-  $('#char-count').textContent = len + ' / 2,200';
-  $('#char-count').style.color = len > 2000 ? 'var(--tt-red)' : 'var(--text-tertiary)';
-  const val = captionInput.value;
-  const cursorPos = captionInput.selectionStart;
-  const textBeforeCursor = val.substring(0, cursorPos);
-  const atMatch = textBeforeCursor.match(/@(\w*)$/);
-  if (atMatch && state.isOptimized) {
-    debounce('caption-mention', () => searchCreators(atMatch[1]), 300);
-  } else {
-    $('#mention-results').classList.remove('active');
-  }
-});
-async function searchCreators(query) {
-  if (!query) { $('#mention-results').classList.remove('active'); return; }
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/tiktok/search-creator`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, access_token: state.accessToken })
-    });
-    let users = [];
-    if (res.ok) { const data = await res.json(); users = data.creators || data.users || []; }
-    if (users.length === 0) {
-      users = [
-        { username: query + '_creator', display_name: query.charAt(0).toUpperCase() + query.slice(1) + ' Creator' },
-        { username: 'official_' + query, display_name: 'Official ' + query }
-      ];
-    }
-    const results = $('#mention-results');
-    results.innerHTML = users.map(u => `
-      <div class="dropdown-item" data-username="${u.username}">
-        <div class="dropdown-item-avatar"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" opacity="0.5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>
-        <div><div style="font-weight:600;color:var(--text-primary)">${u.display_name || u.username}</div><div style="font-size:9px;color:var(--text-tertiary)">@${u.username}</div></div>
-      </div>
-    `).join('');
-    results.classList.add('active');
-    results.querySelectorAll('.dropdown-item').forEach(item => {
-      item.addEventListener('click', function() {
-        const username = this.dataset.username;
-        const val = captionInput.value;
-        const cursorPos = captionInput.selectionStart;
-        const textBefore = val.substring(0, cursorPos);
-        const textAfter = val.substring(cursorPos);
-        const updatedBefore = textBefore.replace(/@\w*$/, '@' + username + ' ');
-        captionInput.value = updatedBefore + textAfter;
-        captionInput.focus();
-        captionInput.dispatchEvent(new Event('input'));
-        results.classList.remove('active');
-        showToast('✓ @' + username + ' mentioned');
-      });
-    });
-  } catch (err) { console.log('Mention search fallback:', err.message); }
-}
-window.insertText = function(text) {
-  const c = captionInput, pos = c.selectionStart;
-  const before = c.value.substring(0, pos), after = c.value.substring(pos);
-  const sep = (before.endsWith(' ') || before.length === 0) ? '' : ' ';
-  c.value = before + sep + text + ' ' + after;
-  c.focus(); c.dispatchEvent(new Event('input'));
-};
-
-// ═══════════════════════════════════════
-// DEBOUNCED SEARCH
-// ═══════════════════════════════════════
-const debounceTimers = {};
-function debounce(key, fn, delay = 300) { clearTimeout(debounceTimers[key]); debounceTimers[key] = setTimeout(fn, delay); }
-window.focusSearch = function(type) { const input = $('#' + type + '-search'); input.style.display = 'block'; input.focus(); };
-$('#mention-search').addEventListener('input', function() {
-  const query = this.value.trim();
-  if (!query) { $('#mention-results').classList.remove('active'); return; }
-  debounce('mention', () => searchCreators(query), 300);
-});
-$('#location-search').addEventListener('input', function() {
-  const query = this.value.trim();
-  const results = $('#location-results');
-  if (!query) { results.classList.remove('active'); return; }
-  debounce('location', async () => {
-    let locations = [{ id: 'loc_1', name: query + ' City Center' }];
-    results.innerHTML = locations.map(l => `<div class="dropdown-item" data-loc-name="${l.name}"><span style="font-size:14px">📍</span><span style="font-weight:500">${l.name}</span></div>`).join('');
-    results.classList.add('active');
-    results.querySelectorAll('.dropdown-item').forEach(item => { item.addEventListener('click', function() { const name = this.dataset.locName; state.selectedLocation = { name }; insertText('📍' + name); $('#location-search').value = ''; $('#location-search').style.display = 'none'; results.classList.remove('active'); showToast('📍 Location set: ' + name); }); });
-  }, 300);
-});
-document.addEventListener('click', (e) => {
-  if (!$('#mention-search').contains(e.target) && !$('#mention-results').contains(e.target)) $('#mention-results').classList.remove('active');
-  if (!$('#location-search').contains(e.target) && !$('#location-results').contains(e.target)) $('#location-results').classList.remove('active');
-});
-
-// ═══════════════════════════════════════
-// OPTIMIZE PIPELINE
-// ═══════════════════════════════════════
-async function executeOptimizePipeline() {
-  if (!state.videoFile) return showToast('⚠ Please select a video first');
-  const overlay = $('#processing-overlay');
-  const subtitle = $('#processing-subtitle');
-  const title = $('#processing-title');
-  const progressBar = $('#progress-bar-fill');
-  const steps = ['proc-step-1', 'proc-step-2', 'proc-step-3', 'proc-step-4'];
-  progressBar.style.width = '0%';
-  progressBar.style.background = 'linear-gradient(90deg, var(--tt-red), var(--tt-cyan))';
-  steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
-  $('#proc-step-1').classList.add('active');
-  title.textContent = 'Quality Bypass Active';
-  overlay.classList.add('active');
-  $('#header-upload-btn').disabled = true;
-  $('#main-upload-btn').disabled = true;
-  function setStep(idx, label, prog) {
-    steps.forEach((id, i) => {
-      const el = $('#' + id);
-      if (i < idx) { el.classList.remove('active'); el.classList.add('done'); }
-      else if (i === idx) { el.classList.add('active'); el.classList.remove('done'); }
-      else { el.classList.remove('active', 'done'); }
-    });
-    subtitle.textContent = label;
-    progressBar.style.width = prog + '%';
-  }
-  try {
-    setStep(0, 'Connecting to bypass engine...', 8);
-    await new Promise(r => setTimeout(r, 400));
-    setStep(1, 'Quality bypass remuxing (H.264 high profile)...', 25);
-    const formData = new FormData();
-    formData.append('video', state.videoFile);
-    let optimizedBlob;
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/optimize-video`, { method: 'POST', body: formData });
-      if (res.ok) { optimizedBlob = await res.blob(); }
-      else { throw new Error('Server returned: ' + res.status); }
-    } catch (err) {
-      console.log('Optimization fallback:', err.message);
-      await new Promise(r => setTimeout(r, 2000));
-      optimizedBlob = new Blob([state.videoFile], { type: 'video/mp4' });
-    }
-    window.AETHER_OPTIMIZED_BLOB = optimizedBlob;
-    state.isOptimized = true;
-    setStep(2, 'Verifying stream integrity...', 70);
-    await new Promise(r => setTimeout(r, 600));
-    setStep(3, 'Optimization complete — Master patched', 100);
-    progressBar.style.background = 'var(--green)';
-    subtitle.textContent = 'Optimization complete — Deploy ready';
-    $('#stat-fps').textContent = '✓ Managed';
-    $('#stat-fps-status').textContent = '✓ Managed';
-    $('#stat-fps-status').className = 'status-indicator green';
-    setTimeout(() => {
-      overlay.classList.remove('active');
-      progressBar.style.width = '0%';
-      steps.forEach(id => { const el = $('#' + id); if (el) el.classList.remove('active', 'done'); });
-      setMetadataFieldsDisabled(false);
-      setDownloadPatchedButton();
-      if (state.isAuthorized) { $('#header-upload-btn').disabled = false; }
-      showToast('✓ Master patched — Ready to upload');
-    }, 1200);
-  } catch (err) {
-    overlay.classList.remove('active');
-    $('#main-upload-btn').disabled = false;
-    showToast('⚠ Optimization failed: ' + err.message);
-    console.error('Optimize error:', err);
-  }
-}
-
-// ═══════════════════════════════════════
-// DIRECT DEPLOY TO TIKTOK PIPELINE
-// ═══════════════════════════════════════
-async function executeDownloadPipeline() {
-  if (!state.isOptimized) return executeOptimizePipeline();
-  if (!window.AETHER_OPTIMIZED_BLOB) return showToast('⚠ No optimized stream found');
-  if (!state.isAuthorized || !state.accessToken) return showToast('⚠ Please authorize TikTok first');
-
-  const overlay = $('#processing-overlay');
-  const subtitle = $('#processing-subtitle');
-  const title = $('#processing-title');
-  const progressBar = $('#progress-bar-fill');
-  
-  progressBar.style.width = '0%';
-  progressBar.style.background = 'linear-gradient(90deg, var(--tt-cyan), #00f2fe)';
-  title.textContent = 'Deploying Directly to TikTok';
-  subtitle.textContent = 'Pushing optimized master file to TikTok core servers...';
-  overlay.classList.add('active');
-  
-  $('#header-upload-btn').disabled = true;
-  $('#main-upload-btn').disabled = true;
-
-  try {
-    const formData = new FormData();
-    // Convert the optimized blob back to a file payload matching server.js requirements
-    const filePayload = new File([window.AETHER_OPTIMIZED_BLOB], "upload.mp4", { type: "video/mp4" });
-    formData.append('video', filePayload);
-    formData.append('access_token', state.accessToken);
-
-    const res = await fetch(`${BACKEND_URL}/api/tiktok/publish-post`, {
-      method: 'POST',
-      body: formData
+      body: JSON.stringify({ code })
     });
 
-    if (!res.ok) {
-      const errDetails = await res.json().catch(() => ({}));
-      throw new Error(errDetails.error || `Server responded with status ${res.status}`);
+    const data = await response.json();
+    if (!response.ok || !data.access_token) {
+      throw new Error(data.error || 'Failed to capture TikTok handshake.');
     }
 
-    progressBar.style.width = '100%';
-    progressBar.style.background = 'var(--green)';
-    subtitle.textContent = 'Successfully uploaded directly to TikTok!';
-    showToast('✓ Video published successfully to TikTok!');
+    state.tiktokToken = data.access_token;
+    subtitle.textContent = 'Fetching synchronized creator profile...';
     
-    setTimeout(() => {
-      overlay.classList.remove('active');
-      $('#header-upload-btn').disabled = false;
-      $('#main-upload-btn').disabled = false;
-    }, 2000);
-
+    await fetchUserProfile(data.access_token);
   } catch (err) {
+    showToast('⚠ Connection Failed: ' + err.message);
     overlay.classList.remove('active');
-    $('#header-upload-btn').disabled = false;
-    $('#main-upload-btn').disabled = false;
-    showToast('⚠ Upload failed: ' + err.message);
-    console.error('Upload Error:', err);
   }
 }
 
-// ═══════════════════════════════════════
-// MAIN BUTTON HANDLER
-// ═══════════════════════════════════════
-$('#main-upload-btn').addEventListener('click', () => {
-  if (!state.isOptimized) executeOptimizePipeline();
-  else executeDownloadPipeline();
-});
-$('#header-upload-btn').addEventListener('click', executeDownloadPipeline);
-document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.preventDefault();
-    if (!state.isOptimized) executeOptimizePipeline();
-    else executeDownloadPipeline();
+async function fetchUserProfile(accessToken) {
+  try {
+    const res = await fetch(`${API.SERVER_API_ROOT}/tiktok/userinfo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: accessToken })
+    });
+
+    const profileData = await res.json();
+    if (!res.ok || !profileData.data || !profileData.data.user) {
+      throw new Error('Profile payloads unreadable.');
+    }
+
+    const user = profileData.data.user;
+    state.userProfile = {
+      username: user.display_name || user.username || "Creator",
+      avatar: user.avatar_url || "https://www.tiktok.com/favicon.ico"
+    };
+
+    state.tiktokConnected = true;
+    updateTikTokUI();
+    showToast(`✓ Connected to ${state.userProfile.username}`);
+  } catch (err) {
+    console.error("Profile payload extraction error:", err);
+    showToast('⚠ Failed to fetch profile details.');
+  } finally {
+    $('#processing-overlay').classList.remove('active');
+  }
+}
+
+function updateTikTokUI() {
+  const accountCard = $('#tiktok-account-card');
+  const connectBtn = $('#tiktok-connect-btn');
+  
+  if (state.tiktokConnected && state.userProfile) {
+    $('#tt-avatar').src = state.userProfile.avatar;
+    $('#tt-username').textContent = state.userProfile.username;
+    $('#tt-status').textContent = '@' + (state.userProfile.username.toLowerCase().replace(/\s+/g, ''));
+    
+    accountCard.classList.add('connected');
+    connectBtn.innerHTML = '<span>Disconnect Engine</span>';
+    connectBtn.style.border = '1px solid rgba(254,44,85,0.3)';
+  } else {
+    accountCard.classList.remove('connected');
+    connectBtn.innerHTML = '<span>Link TikTok Account</span>';
+    connectBtn.style.border = '';
+  }
+}
+
+// Watch for redirect codes hitting the address bar automatically
+window.addEventListener('DOMContentLoaded', () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  if (code) {
+    // Clean the address bar query arguments without refreshing
+    window.history.replaceState({}, document.title, window.location.pathname);
+    handleAuthCode(code);
   }
 });
-})();
-</script>
 </body>
 </html>
