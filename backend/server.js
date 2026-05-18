@@ -1,8 +1,8 @@
-import express from 'express';
-import cors from 'cors';
-import axios from 'axios';
-import multer from 'multer';
-import dotenv from 'dotenv';
+const express = require('express');
+const cors = require('cors');
+const axios = require('axios');
+const multer = require('multer');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
@@ -22,8 +22,10 @@ const TIKTOK_CONFIG = {
   REDIRECT_URI: "https://moonlight-haven.github.io/AetherEnhancetest/studio.html"
 };
 
-// ── BINARY BITSTREAM MANIPULATION UTILITIES (FIXED FOR TIMELINE TRACKING) ──
-function writeU32(buf, off, v) { buf.writeUInt32BE(v >>> 0, off); }
+// ── BINARY BITSTREAM MANIPULATION UTILITIES ──
+function writeU32(buf, off, v) { 
+  buf.writeUInt32BE(v >>> 0, off); 
+}
 
 function* walkBoxes(buf, start, end) {
   let off = start;
@@ -56,17 +58,16 @@ function findChild(buf, parent, type) {
   return null;
 }
 
-// ── ENDPOINT 1: FIXED QUALITY BYPASS LAYER ──
+// ── ENDPOINT 1: QUALITY BYPASS LAYER (WITH STTS TIMELINE LOCKED) ──
 app.post('/api/optimize-video', upload.single('video'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Missing file payload." });
     
     console.log(`[Patcher Engine] Optimizing: ${req.file.originalname}`);
-    const buf = Buffer.from(req.file.buffer); // Deep copy buffer execution
+    const buf = Buffer.from(req.file.buffer); 
     
     const moovs = findBoxes(buf, 'moov', 0, buf.length);
     for (const moov of moovs) {
-      // 1. Fix the Global Movie Header (mvhd) Timescale & Duration proportionally
       const mvhd = findChild(buf, moov, 'mvhd');
       if (mvhd) {
         const version = buf[mvhd.contentStart];
@@ -79,7 +80,6 @@ app.post('/api/optimize-video', upload.single('video'), (req, res) => {
         }
         
         const oldTimescale = buf.readUInt32BE(timescaleOffset);
-        // Set target container flag to a standard 30,000 index 
         const targetTimescale = 30000; 
         const scaleFactor = targetTimescale / oldTimescale;
         
@@ -94,7 +94,6 @@ app.post('/api/optimize-video', upload.single('video'), (req, res) => {
         }
       }
       
-      // 2. Walk down individual track layers (trak -> mdia -> mdhd / stts)
       for (const trak of walkBoxes(buf, moov.contentStart, moov.contentEnd)) {
         if (trak.type !== 'trak') continue;
         
@@ -103,7 +102,6 @@ app.post('/api/optimize-video', upload.single('video'), (req, res) => {
         const minf = findChild(buf, mdia, 'minf'); if (!minf) continue;
         const stbl = findChild(buf, minf, 'stbl'); if (!stbl) continue;
         
-        // Fix Media Header (mdhd) timescales to match global wrapper
         const mdhdVersion = buf[mdhd.contentStart];
         let mediaTimescaleOffset = mdhd.contentStart + 12;
         let mediaDurationOffset = mdhd.contentStart + 16;
@@ -127,7 +125,6 @@ app.post('/api/optimize-video', upload.single('video'), (req, res) => {
           buf.writeBigUInt64BE(BigInt(Math.round(Number(oldMediaDuration) * mediaScaleFactor)), mediaDurationOffset);
         }
 
-        // CRITICAL FIX: Update Time-to-Sample (stts) atom mapping so timeline calculations stay locked
         const stts = findChild(buf, stbl, 'stts');
         if (stts) {
           const entryCount = buf.readUInt32BE(stts.contentStart + 4);
@@ -138,7 +135,6 @@ app.post('/api/optimize-video', upload.single('video'), (req, res) => {
             const sampleCount = buf.readUInt32BE(currentOffset);
             const sampleDelta = buf.readUInt32BE(currentOffset + 4);
             
-            // Adjust the delta mapping proportionally based on our container adjustment scale
             const newDelta = Math.max(1, Math.round(sampleDelta * mediaScaleFactor));
             writeU32(buf, currentOffset + 4, newDelta);
             currentOffset += 8;
@@ -188,7 +184,6 @@ app.post('/api/tiktok/userinfo', async (req, res) => {
     });
     res.json(response.data);
   } catch (err) {
-    // Graceful fallback for sandbox restrictions so the UI never hits an empty state
     res.json({ data: { user: { display_name: "Moonlight Editor", avatar_url: "https://www.tiktok.com/favicon.ico" } } });
   }
 });
